@@ -2,7 +2,7 @@
 
 > Canonical record of all evaluation runs. Updated: 2026-09-16.
 
-## Harder-Benchmark Slate (2026-09-16, issue #96)
+## Harder-Benchmark Slate (2026-09-16, issues #96/#97)
 
 **GPQA Diamond** (198 PhD-level science MC, GLM-5.3-Flash, 1 seed, 396 trials, 0 errors):
 
@@ -19,6 +19,21 @@ search space to bound). Contrast anchor for the difficulty-response curve
 Data: `benchmarks/results/2026-09-16-gpqa-diamond/`, slice in
 `benchmarks/data/gpqa_diamond.jsonl` (from corp YT raw table — the processed
 `gpqa_diamond_gpt_202` table drops 2 rows, issue #104).
+
+**AIME 2024+2025** (60 competition problems, integer answers, 4 seeds, 480 trials, 0 errors / 0 truncations):
+
+| Arm | Pass@1 (95% CI) | Avg tokens |
+|---|---|---|
+| classic | 30.8% ± 5.8 (74/240) | 1895 |
+| tahoe-93 | 37.1% ± 6.1 (89/240) | 1830 |
+
+Delta **+6.2pp, z=1.45 — not significant** (p≈0.15), direction consistent in
+4/4 seeds; tokens 0.97×. **The token-wall mechanism did not fire** — zero
+truncation in both arms at max_tokens=2048; the delta is genuine answer
+quality, not budget survival. Recorded as **null-trending-positive** per the
+predeclared H0 discipline (issue #97). Curve anchor #2 (classic-acc ~31%).
+Data: `benchmarks/results/2026-09-16-aime-24-25/`, slice in
+`benchmarks/data/aime60.jsonl` (corp Harbor adapter's source URLs).
 
 ## Current State: Cross-Model Evaluation (63,348 trials)
 
