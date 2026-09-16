@@ -55,9 +55,14 @@ if _arms_env:
 else:
     ARMS = list(DEFAULT_ARMS)
 
-TRIALS_PER_TASK = 3
+TRIALS_PER_TASK = int(os.environ.get("BENCH_TRIALS", "3"))
 SEED = 42
 MAX_SAMPLES_PER_BENCH = 10  # 10 samples per benchmark for paper
+
+# Run only these benchmarks (comma-separated benchmark names). Empty = all.
+BENCHES = [b.strip() for b in os.environ.get("BENCHES", "").split(",") if b.strip()]
+# GPQA Diamond subset limit for smoke runs (0 = full 198)
+GPQA_LIMIT = int(os.environ.get("GPQA_LIMIT", "0"))
 
 
 def load_arm_prompt(arm, prompt_cache=None):
@@ -404,6 +409,23 @@ def load_tasks():
             "difficulty": "hard",
         })
 
+    # GPQA Diamond — PhD-level science MC (198 questions, full set from YT)
+    gpqa_path = Path(__file__).parent / "data" / "gpqa_diamond.jsonl"
+    # split on \n only: question text may contain Unicode line separators
+    gpqa = [json.loads(l) for l in gpqa_path.read_text(encoding="utf-8").split("\n") if l.strip()]
+    if GPQA_LIMIT:
+        gpqa = gpqa[:GPQA_LIMIT]
+    for ex in gpqa:
+        opts = "\n".join(f"({chr(ord('A')+j)}) {o}" for j, o in enumerate(ex["options"]))
+        tasks.append({
+            "task_id": ex["task_id"],
+            "benchmark": "gpqa",
+            "description": f"{ex['question']}\n\n{opts}\n\nAnswer with just the letter (A, B, C, or D).",
+            "expected": ex["expected"],
+            "grader": "gpqa",
+            "difficulty": "hard",
+        })
+
     return tasks
 
 
@@ -425,6 +447,8 @@ def grade_task(task, model_answer):
         return grade_math(model_answer, task["expected"])
     elif grader == "race":
         return grade_race(model_answer, task["expected"])
+    elif grader == "gpqa":
+        return grade_arc(model_answer, task["expected"])
     return False, "unknown grader"
 
 
@@ -481,7 +505,9 @@ def run_trial(task, arm, skill_prompt, trial_idx):
 def main():
     print("Loading public benchmarks...")
     tasks = load_tasks()
-    print(f"  {len(tasks)} tasks loaded ({MAX_SAMPLES_PER_BENCH} per benchmark x 3 benchmarks)")
+    if BENCHES:
+        tasks = [t for t in tasks if t["benchmark"] in BENCHES]
+    print(f"  {len(tasks)} tasks loaded")
 
     skill_prompt = load_skill()
 

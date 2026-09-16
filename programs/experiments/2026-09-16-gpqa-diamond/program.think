@@ -1,0 +1,15 @@
+PROGRAM gpqa-diamond VERSION 1.1
+INPUT
+    G.task = "Does typed bounding help or fight knowledge retrieval on PhD-level science"
+    C.protocol = "frozen invariant: identical graders, extraction, max_turns=1, max_tokens=2048, timeout=60s"
+    C.model = "GLM-5.3-Flash_alexkay28/. via Eliza raw internal v2, the only model for every arm"
+    C.arms = "two arms only: pure model attempt (classic, no skill) vs tahoe-enhanced (tahoe-93 skill)"
+    C.data = "benchmarks/data/gpqa_diamond.jsonl, 198 questions from YT raw table gpqa_diamond, seed-42 option shuffle"
+    C.change = "v1.1: HF gated dataset replaced by corp YT raw table, full 198 rows"
+
+step.run: DO run_eval(benches = "gpqa", arms = C.arms, model = C.model, trials = "1 per sample per arm, 396 total", budget = C.protocol) -> OUT.trials
+step.grade: DO grade(trials = OUT.trials, extractor = "letter A-D, arm-agnostic, grade_arc logic") -> E.pass_rates
+step.tokens: DO account(trials = OUT.trials, metrics = "truncation rate, token ratio") -> E.tokens
+step.report: DO report(pass_rates = E.pass_rates, tokens = E.tokens, target = "docs/EVALUATION.md and issue 102 dataset") -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary

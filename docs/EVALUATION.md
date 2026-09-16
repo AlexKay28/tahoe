@@ -1,6 +1,24 @@
 # TAHOE Evaluation Results
 
-> Canonical record of all evaluation runs. Updated: 2026-09-14.
+> Canonical record of all evaluation runs. Updated: 2026-09-16.
+
+## Harder-Benchmark Slate (2026-09-16, issue #96)
+
+**GPQA Diamond** (198 PhD-level science MC, GLM-5.3-Flash, 1 seed, 396 trials, 0 errors):
+
+| Arm | Pass@1 (95% CI) | Avg tokens | Output tokens |
+|---|---|---|---|
+| classic | 49.5% ± 7.0 (98/198) | 1560 | 1323 |
+| tahoe-93 | 51.0% ± 7.0 (101/198) | 1565 | 1239 |
+
+Delta **+1.5pp, z=0.30 — not significant**; total tokens 1.00×, output 0.94×.
+**Reading**: quality-neutral on knowledge retrieval — consistent with the
+mechanism claim (TAHOE bounds multi-step *search*; knowledge lookup has no
+search space to bound). Contrast anchor for the difficulty-response curve
+(#102): gsm8k +11.8pp @ 0.38× vs GPQA-D +1.5pp n.s. @ 1.00×.
+Data: `benchmarks/results/2026-09-16-gpqa-diamond/`, slice in
+`benchmarks/data/gpqa_diamond.jsonl` (from corp YT raw table — the processed
+`gpqa_diamond_gpt_202` table drops 2 rows, issue #104).
 
 ## Current State: Cross-Model Evaluation (63,348 trials)
 
