@@ -28,6 +28,7 @@ SOURCES = [
     ("GPQA Diamond", ROOT / "benchmarks/results/2026-09-16-gpqa-diamond/public_benchmarks.json"),
     ("AIME 2024+2025", ROOT / "benchmarks/results/2026-09-16-aime-24-25/public_benchmarks.json"),
     ("MMLU-Pro 800", ROOT / "benchmarks/results/2026-09-16-mmlu-pro-800/public_benchmarks.json"),
+    ("LiveCodeBench v6-150", ROOT / "benchmarks/results/2026-09-17-lcb-v6-150/public_benchmarks.json"),
 ]
 OUT_DIR = ROOT / "benchmarks/results/2026-09-16-difficulty-curve"
 FIG_PATH = ROOT / "paper/figures/difficulty_response.pdf"

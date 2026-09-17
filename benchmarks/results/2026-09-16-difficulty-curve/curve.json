@@ -84,6 +84,18 @@
     "token_ratio": 0.8027
   },
   {
+    "benchmark": "lcb",
+    "n_classic": 150,
+    "n_tahoe": 150,
+    "classic_acc": 0.2867,
+    "tahoe_acc": 0.3333,
+    "delta_pp": 4.67,
+    "delta_ci95_pp": 10.47,
+    "z": 0.87,
+    "significant_95": false,
+    "token_ratio": 0.9952
+  },
+  {
     "benchmark": "lsat",
     "n_classic": 1530,
     "n_tahoe": 1530,

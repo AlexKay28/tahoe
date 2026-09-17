@@ -50,6 +50,26 @@ multi-step computation and discrimination gain; knowledge lookup and frontier
 math do not significantly move. Data: `benchmarks/results/2026-09-16-mmlu-pro-800/`,
 slice in `benchmarks/data/mmlu_pro_800.jsonl` (proportional stratified, seed 42).
 
+**LiveCodeBench v6-150** (execution-verified code gen, 150 newest problems of
+the Jan-Apr 2025 window, 300 trials, 0 timeouts / 0 verifier errors):
+
+| Arm | Pass@1 (95% CI) | Avg tokens |
+|---|---|---|
+| classic | 28.7% ± 7.2 (43/150) | 2192 |
+| tahoe-93 | 33.3% ± 7.5 (50/150) | 2182 |
+
+Delta **+4.7pp, z=0.87 — not significant** (p≈0.38); tokens 0.995×. All
+failures genuine wrong answers. Sandbox: corp-parity verifier
+(`final_test.py` verbatim) under `unshare -n` isolation — no docker needed.
+Recorded as **null-trending-positive**. Curve anchor #4 (classic-acc 29%).
+Data: `benchmarks/results/2026-09-17-lcb-v6-150/`, slice in
+`benchmarks/data/lcb_v6_150.jsonl`.
+
+**Slate pattern (4 harder benchmarks, 2026-09-16/17):** only MMLU-Pro
+significant (+4.2pp, z=2.03); AIME (+6.2), LCB (+4.7), GPQA (+1.5) trend
+positive without clearing the bar — 4/4 direction-consistent, each needing
+more trials for a verdict-grade claim.
+
 ## Current State: Cross-Model Evaluation (63,348 trials)
 
 Two models, 10 public benchmarks, **full test sets**, 3 trials per sample, 2 arms
