@@ -1,0 +1,14 @@
+PROGRAM difficulty-curve VERSION 1.1
+INPUT
+    G.task = "Does the tahoe quality delta grow with benchmark difficulty"
+    C.rule = "difficulty anchored to OUR classic arm, never to published leaderboard numbers"
+    C.model = "GLM-5.3-Flash_alexkay28/. via Eliza raw internal v2, the only model in the primary curve"
+    C.arms = "every aggregated pair: pure model attempt (classic, no skill) vs tahoe-enhanced (tahoe-93), same pipeline"
+    C.data = "stage-1 full sets + issues 96, 97, 98 committed trial files"
+    C.change = "v1.1: all four sources present; 13 benchmarks aggregated"
+
+step.collect: DO aggregate(sources = "2026-09-13-stage1-full, 2026-09-16-gpqa-diamond, 2026-09-16-aime-24-25, 2026-09-16-mmlu-pro-800", script = "benchmarks/difficulty_curve.py") -> E.dataset
+step.fit: DO plot(x = "classic-arm accuracy", y = "tahoe minus classic delta with 95 percent CI", secondary = "token ratio tahoe over classic", output = "paper/figures/difficulty_response.pdf") -> OUT.figure
+step.paper: DO write(target = "paper/tahoe.tex Results: Difficulty Response subsection, honest interpretation paragraph") -> OUT.paper
+DONE matched(OUT.paper, ".+")
+RETURN OUT.paper
