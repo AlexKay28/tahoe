@@ -35,6 +35,21 @@ predeclared H0 discipline (issue #97). Curve anchor #2 (classic-acc ~31%).
 Data: `benchmarks/results/2026-09-16-aime-24-25/`, slice in
 `benchmarks/data/aime60.jsonl` (corp Harbor adapter's source URLs).
 
+**MMLU-Pro stratified-800** (10-option discrimination, 14 categories, 1,600 trials, 0 errors / 0 truncations):
+
+| Arm | Pass@1 (95% CI) | Avg tokens |
+|---|---|---|
+| classic | 75.1% ± 3.0 (601/800) | 855 |
+| tahoe-93 | 79.4% ± 2.8 (635/800) | 750 |
+
+Delta **+4.2pp, z=2.03 — significant at 95%** (p≈0.042) at **0.877× tokens** —
+the slate's first significant result, dominant on BOTH axes. Mechanism held:
+high distractor density rewards structured error-correction. Curve anchor #3
+(classic-acc 75%). Slate pattern is task-type-driven, not difficulty-monotonic:
+multi-step computation and discrimination gain; knowledge lookup and frontier
+math do not significantly move. Data: `benchmarks/results/2026-09-16-mmlu-pro-800/`,
+slice in `benchmarks/data/mmlu_pro_800.jsonl` (proportional stratified, seed 42).
+
 ## Current State: Cross-Model Evaluation (63,348 trials)
 
 Two models, 10 public benchmarks, **full test sets**, 3 trials per sample, 2 arms

@@ -195,6 +195,16 @@ def grade_gsm8k(model_answer, expected_answer):
     return model_num == expected_num, f"expected={expected_num}, got={model_num}"
 
 
+def grade_mmlu_pro(model_answer, expected_answer):
+    """MMLU-Pro: up to 10 options, answer letter A-J. Official eval = letter match."""
+    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
+    if len(model_letter) > 1:
+        match = re.search(r'\b([A-J])\b', model_letter)
+        if match:
+            model_letter = match.group(1)
+    return model_letter == expected_answer.strip().upper(), f"expected={expected_answer}, got={model_letter}"
+
+
 def grade_aime(model_answer, expected_answer):
     """AIME: integer answer 0-999. Gold is a bare integer (no #### marker),
     so both sides go through the same arm-agnostic v3 extractor."""
@@ -448,6 +458,20 @@ def load_tasks():
             "difficulty": "hard",
         })
 
+    # MMLU-Pro — stratified 800-question subset, 10-option discrimination
+    mmlupro_path = Path(__file__).parent / "data" / "mmlu_pro_800.jsonl"
+    mmlupro = [json.loads(l) for l in mmlupro_path.read_text(encoding="utf-8").split("\n") if l.strip()]
+    for ex in mmlupro:
+        opts = "\n".join(f"({chr(ord('A')+j)}) {o}" for j, o in enumerate(ex["options"]))
+        tasks.append({
+            "task_id": ex["task_id"],
+            "benchmark": "mmlu_pro",
+            "description": f"{ex['question']}\n\n{opts}\n\nAnswer with just the letter of the correct option.",
+            "expected": ex["expected"],
+            "grader": "mmlu_pro",
+            "difficulty": "hard",
+        })
+
     return tasks
 
 
@@ -473,6 +497,8 @@ def grade_task(task, model_answer):
         return grade_arc(model_answer, task["expected"])
     elif grader == "aime":
         return grade_aime(model_answer, task["expected"])
+    elif grader == "mmlu_pro":
+        return grade_mmlu_pro(model_answer, task["expected"])
     return False, "unknown grader"
 
 

@@ -1,0 +1,15 @@
+PROGRAM mmlu-pro-subset VERSION 1.1
+INPUT
+    G.task = "Pattern-matching resistance at up to 10 options per question"
+    C.protocol = "frozen invariant: identical graders, extraction, max_turns=1, max_tokens=2048, timeout=60s"
+    C.model = "GLM-5.3-Flash_alexkay28/. via Eliza raw internal v2, the only model for every arm"
+    C.arms = "two arms only: pure model attempt (classic, no skill) vs tahoe-enhanced (tahoe-93 skill)"
+    C.data = "benchmarks/data/mmlu_pro_800.jsonl, proportional stratified-800 across 14 categories, seed 42, committed once"
+    C.change = "v1.1: source dataset id TIGER-Lab/MMLU-Pro; option counts 3-10 kept as in source"
+
+step.run: DO run_eval(benches = "mmlu_pro", arms = C.arms, model = C.model, trials = "1 per sample per arm, 1600 total", budget = C.protocol) -> OUT.trials
+step.grade: DO grade(trials = OUT.trials, extractor = "letter A-J, arm-agnostic") -> E.pass_rates
+step.tokens: DO account(trials = OUT.trials, metrics = "token ratio, truncation rate") -> E.tokens
+step.report: DO report(pass_rates = E.pass_rates, tokens = E.tokens, target = "docs/EVALUATION.md and issue 102 dataset") -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary
