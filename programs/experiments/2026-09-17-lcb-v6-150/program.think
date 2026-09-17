@@ -1,0 +1,16 @@
+PROGRAM livecodebench VERSION 1.1
+INPUT
+    G.task = "Code generation pass@1 with execution-verified grading"
+    C.protocol = "frozen budget rules apply to both arms; max_turns=1, no feedback loop"
+    C.model = "GLM-5.3-Flash_alexkay28/. via Eliza raw internal v2, the only model for every arm"
+    C.arms = "two arms only: pure model attempt (classic, no skill) vs tahoe-enhanced (tahoe-93 skill)"
+    C.data = "benchmarks/data/lcb_v6_150.jsonl, 150 newest problems of release_v6 by contest_date"
+    C.change = "v1.1: decision gate resolved — port corp adapter verifier (final_test.py verbatim) into subprocess sandbox, no docker, no Harbor"
+
+step.sandbox: DO build(artifact = "benchmarks/lcb_sandbox.py: scratch dir per trial, unshare -n isolation, timeout 300, corp-parity verifier") -> E.sandbox
+step.validate: DO verify(artifact = E.sandbox, cases = "known-good solution passes 33 tests, known-bad fails, zero infra errors in run") -> E.runner
+step.run: DO run_eval(benches = "lcb", arms = C.arms, model = C.model, n = "150 problems, pass@1, 1 seed", budget = C.protocol) -> OUT.trials
+step.grade: DO grade(trials = OUT.trials, verifier = E.runner, breakdown = "timeout vs wrong_answer per arm") -> E.pass_rates
+step.report: DO report(pass_rates = E.pass_rates, target = "docs/EVALUATION.md and issue 102 dataset") -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary

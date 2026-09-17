@@ -428,6 +428,27 @@ def load_tasks():
             "difficulty": "hard",
         })
 
+    # LiveCodeBench release_v6 subset — execution-verified code generation
+    lcb_path = Path(__file__).parent / "data" / "lcb_v6_150.jsonl"
+    lcb = [json.loads(l) for l in lcb_path.read_text(encoding="utf-8").split("\n") if l.strip()]
+    for ex in lcb:
+        starter = ex["starter_code"].strip()
+        instruction = (
+            "Write a Python solution as a single ```python code block. "
+            "If the starter code defines a Solution class, provide the complete class with the required method; "
+            "otherwise write a script that reads from standard input and prints the answer. "
+            "No test code, no I/O beyond what the problem requires."
+        )
+        tasks.append({
+            "task_id": ex["task_id"],
+            "benchmark": "lcb",
+            "description": f"{ex['question_content']}\n\n{starter}\n\n{instruction}",
+            "expected": "execution-verified",
+            "grader": "lcb",
+            "difficulty": ex["difficulty"],
+            "problem": ex,
+        })
+
     # GPQA Diamond — PhD-level science MC (198 questions, full set from YT)
     gpqa_path = Path(__file__).parent / "data" / "gpqa_diamond.jsonl"
     # split on \n only: question text may contain Unicode line separators
@@ -499,6 +520,10 @@ def grade_task(task, model_answer):
         return grade_aime(model_answer, task["expected"])
     elif grader == "mmlu_pro":
         return grade_mmlu_pro(model_answer, task["expected"])
+    elif grader == "lcb":
+        from lcb_sandbox import run_lcb_trial
+        r = run_lcb_trial(task["problem"], model_answer)
+        return r["passed"], f"{r['failure_class']}: {r['summary']}"
     return False, "unknown grader"
 
 
