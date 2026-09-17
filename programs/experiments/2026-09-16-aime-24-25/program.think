@@ -1,0 +1,15 @@
+PROGRAM aime-24-25 VERSION 1.1
+INPUT
+    G.task = "Token-budget wall vs compression at the difficulty frontier"
+    C.protocol = "frozen invariant; max_tokens=2048 kept for BOTH arms, the wall is part of the measurement"
+    C.model = "GLM-5.3-Flash_alexkay28/. via Eliza raw internal v2, the only model for every arm"
+    C.arms = "two arms only: pure model attempt (classic, no skill) vs tahoe-enhanced (tahoe-93 skill)"
+    C.data = "benchmarks/data/aime60.jsonl, 60 problems from corp Harbor adapter source URLs"
+    C.change = "v1.1: dataset built from GAIR-NLP/AIME-Preview jsonls, not hand-assembled"
+
+step.run: DO run_eval(benches = "aime", arms = C.arms, model = C.model, trials = "4 seeds per sample per arm, 480 total", budget = C.protocol) -> OUT.trials
+step.grade: DO grade(trials = OUT.trials, extractor = "grade_aime: bare-integer gold via arm-agnostic v3 extractor") -> E.pass_rates
+step.wall: DO account(trials = OUT.trials, metrics = "truncation rate classic vs tahoe, token ratio") -> E.wall
+step.report: DO report(pass_rates = E.pass_rates, wall = E.wall, target = "docs/EVALUATION.md and issue 102 dataset") -> OUT.summary
+DONE matched(OUT.summary, ".+")
+RETURN OUT.summary

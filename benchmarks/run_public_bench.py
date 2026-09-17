@@ -195,6 +195,15 @@ def grade_gsm8k(model_answer, expected_answer):
     return model_num == expected_num, f"expected={expected_num}, got={model_num}"
 
 
+def grade_aime(model_answer, expected_answer):
+    """AIME: integer answer 0-999. Gold is a bare integer (no #### marker),
+    so both sides go through the same arm-agnostic v3 extractor."""
+    model_num = extract_model_number(model_answer)
+    gold_num = extract_model_number(expected_answer)
+    ok = model_num != "" and model_num == gold_num
+    return ok, f"expected={gold_num}, got={model_num}"
+
+
 def grade_arc(model_answer, expected_answer):
     """ARC: match answerKey (A/B/C/D). Official eval = exact letter match."""
     model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
@@ -426,6 +435,19 @@ def load_tasks():
             "difficulty": "hard",
         })
 
+    # AIME 2024+2025 — competition math, integer answers 0-999 (60 problems)
+    aime_path = Path(__file__).parent / "data" / "aime60.jsonl"
+    aime = [json.loads(l) for l in aime_path.read_text(encoding="utf-8").split("\n") if l.strip()]
+    for ex in aime:
+        tasks.append({
+            "task_id": ex["task_id"],
+            "benchmark": "aime",
+            "description": f"{ex['problem']}\n\nGive your final answer as a single integer between 0 and 999.",
+            "expected": ex["expected"],
+            "grader": "aime",
+            "difficulty": "hard",
+        })
+
     return tasks
 
 
@@ -449,6 +471,8 @@ def grade_task(task, model_answer):
         return grade_race(model_answer, task["expected"])
     elif grader == "gpqa":
         return grade_arc(model_answer, task["expected"])
+    elif grader == "aime":
+        return grade_aime(model_answer, task["expected"])
     return False, "unknown grader"
 
 
