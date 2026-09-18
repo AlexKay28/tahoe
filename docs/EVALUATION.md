@@ -70,6 +70,14 @@ significant (+4.2pp, z=2.03); AIME (+6.2), LCB (+4.7), GPQA (+1.5) trend
 positive without clearing the bar — 4/4 direction-consistent, each needing
 more trials for a verdict-grade claim.
 
+**7-task ablation (#55, 2026-09-17)** — classic vs tahoe-93 on agentic-style
+tasks (routing ×2, code-fix ×2, plan, recover, search; 5 trials each):
+tokens-per-solved-task lower on **all 7 tasks** (0.54–0.90×, aggregate
+**0.65×**); quality at parity on 6 well-posed tasks incl. a +40pp win on
+routing-02 at 0.54× tokens. The only quality drop (plan-01, 0.20) is a task
+defect — ill-posed grader, filed as #110. Data:
+`benchmarks/results/2026-09-17-ablation-7tasks/`.
+
 ## Current State: Cross-Model Evaluation (63,348 trials)
 
 Two models, 10 public benchmarks, **full test sets**, 3 trials per sample, 2 arms
