@@ -50,13 +50,68 @@ from typing import TYPE_CHECKING, Any
 from tahoe.budgets import BudgetGate, ExecutionBudget
 from tahoe.runtime.coordinator import SequentialCoordinator, _uses_kb_refs
 from tahoe.runtime.events import EventStore, EventType, StateVersionConflict
-from tahoe.syntax import validate_program
+from tahoe.syntax import seal_digest, validate_program
+from tahoe.syntax.model import (
+    Conditional,
+    First,
+    Loop,
+    Return,
+    Stop,
+    Try,
+)
 
 if TYPE_CHECKING:
     from tahoe.memory import KnowledgeBase
     from tahoe.syntax.model import Program
 
 __all__ = ["resume_run"]
+
+
+def _sole_return_refs(program: "Program") -> tuple[str, ...] | None:
+    """Refs of the program's sole RETURN when a legacy replay is exact.
+
+    A terminal RUN_FINISHED recorded before outputs were persisted (a
+    legacy run) carries only its status, so the original outputs must be
+    reconstructed by replaying the committed deltas.  That replay is
+    exact only when the RETURN is the program's single terminal of any
+    kind (no STOP, no nested RETURN, no LOOP EXHAUSTED terminal): then
+    a ``succeeded`` legacy run can only have finished through that
+    RETURN, and its refs' replayed values are the original outputs.
+    Any other terminal shape makes the terminating statement
+    undecidable from the event history, so ``None`` keeps the safe
+    empty output mapping.
+    """
+    returns: list[Return] = []
+    stops: list[Stop] = []
+
+    def walk(statements: tuple[object, ...]) -> None:
+        for statement in statements:
+            if isinstance(statement, Return):
+                returns.append(statement)
+            elif isinstance(statement, Stop):
+                stops.append(statement)
+            elif isinstance(statement, Conditional):
+                walk((statement.statement,))
+                walk(statement.if_branch_extra)
+                walk(statement.else_branch or ())
+            elif isinstance(statement, Loop):
+                walk(statement.body)
+                if isinstance(statement.exhausted, Stop):
+                    stops.append(statement.exhausted)
+            elif isinstance(statement, First):
+                walk(statement.body)
+            elif isinstance(statement, Try):
+                for branch in statement.branches:
+                    walk(branch)
+
+    walk(program.statements)
+    if len(returns) != 1 or stops:
+        return None
+    sole = returns[0]
+    for statement in program.statements:
+        if statement is sole:
+            return sole.refs
+    return None
 
 
 def resume_run(
@@ -69,6 +124,7 @@ def resume_run(
     workspace_root: str | None = None,
     budget: "ExecutionBudget | None" = None,
     max_workers: int | None = None,
+    allow_unsealed_legacy: bool = False,
 ) -> dict[str, Any]:
     """Resume an interrupted run; same result shape as ``execute``.
 
@@ -77,6 +133,19 @@ def resume_run(
     the remaining plan to the coordinator's
     :meth:`SequentialCoordinator._resume_existing_run` with the same
     ledger/event invariants as a fresh start.
+
+    Every resumed run verifies the original program seal recorded in its
+    RUN_STARTED payload: a run whose recorded seal does not match
+    ``seal_digest(program)`` is refused, and so is a run with *no*
+    recorded seal (recorded before seals were persisted, or with no
+    RUN_STARTED payload at all) — its original program cannot be
+    verified, so resuming it is refused by default.  Such a legacy run
+    resumes only through the explicitly unsafe ``allow_unsealed_legacy``
+    opt-in, which never excuses a *mismatched* seal.
+
+    ``allow_unsealed_legacy`` (default ``False``) names that unsafe
+    behavior deliberately: passing ``True`` resumes an unsealed legacy
+    run without any program-seal verification.
 
     ``workspace_root`` mirrors the coordinator's WorkspacePolicy hook so
     a resumed run dispatches effectful commands exactly like ``run``.
@@ -105,20 +174,21 @@ def resume_run(
 
     # -- identity: the run must exist and belong to this program ------
     # (store.run raises KeyError for an unknown run; the RUN_STARTED
-    # payload records the program name/version a fresh start sealed in.)
+    # payload records the sealed program a fresh start committed.)
     store.run(run_id)
     run_started = next(
         (event for event in events if event.event_type is EventType.RUN_STARTED),
         None,
     )
-    if (
-        run_started is not None
-        and isinstance(run_started.payload, dict)
-        and run_started.payload.get("program") is not None
-    ):
+    started_payload = (
+        run_started.payload
+        if run_started is not None and isinstance(run_started.payload, dict)
+        else {}
+    )
+    if started_payload.get("program") is not None:
         recorded = (
-            run_started.payload.get("program"),
-            run_started.payload.get("version"),
+            started_payload.get("program"),
+            started_payload.get("version"),
         )
         if recorded != (program.name, program.version):
             raise ValueError(
@@ -126,6 +196,26 @@ def resume_run(
                 f" the run's recorded program {recorded[0]}@{recorded[1]};"
                 " refusing to resume with a mismatched program"
             )
+    recorded_seal = started_payload.get("seal_digest")
+    if recorded_seal is None and not allow_unsealed_legacy:
+        # Every resumed run verifies the original program seal.  A run
+        # with no recorded seal (recorded before seal_digest joined the
+        # RUN_STARTED payload, or with no RUN_STARTED at all) cannot be
+        # verified against the presented program, so resuming it is
+        # refused by default — before any event is appended — unless the
+        # explicitly unsafe legacy opt-in is passed.
+        raise ValueError(
+            f"run {run_id!r} records no program seal digest (no"
+            " RUN_STARTED payload, or one recorded before seals were"
+            " persisted); the original program cannot be verified."
+            " Refusing to resume an unsealed legacy run; pass"
+            " allow_unsealed_legacy=True to resume it anyway"
+        )
+    if recorded_seal is not None and recorded_seal != seal_digest(program):
+        raise ValueError(
+            "program seal digest does not match the run's recorded"
+            " seal; refusing to resume with a mismatched program"
+        )
 
     # -- terminal runs are never resumed (W4/W10/W11/W12) -------------
     # Issue #77: an AWAIT-blocked run has no RUN_FINISHED — it is
@@ -133,16 +223,42 @@ def resume_run(
     run_finished = [
         event for event in events if event.event_type is EventType.RUN_FINISHED
     ]
-    if run_finished:
+    terminal_finished = []
+    for event in run_finished:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if not (
+            payload.get("status") == "blocked"
+            and payload.get("reason") == "approve"
+        ):
+            terminal_finished.append(event)
+    if terminal_finished:
         payload = (
-            run_finished[-1].payload
-            if isinstance(run_finished[-1].payload, dict)
+            terminal_finished[-1].payload
+            if isinstance(terminal_finished[-1].payload, dict)
             else {}
         )
+        outputs = payload.get("outputs")
+        if not isinstance(outputs, dict):
+            # Legacy terminal run (recorded before outputs joined the
+            # RUN_FINISHED payload): reconstruct the original RETURN
+            # outputs only when a single-RETURN program makes the
+            # replay exact (see _sole_return_refs).
+            outputs = {}
+            if payload.get("status") == "succeeded":
+                refs = _sole_return_refs(program)
+                if refs is not None:
+                    values = {
+                        declaration.ref: declaration.value
+                        for declaration in program.declarations
+                    }
+                    SequentialCoordinator._apply_committed_deltas(
+                        values, events
+                    )
+                    outputs = {ref: values.get(ref) for ref in refs}
         result: dict[str, Any] = {
             "run_id": run_id,
             "status": payload.get("status", "unknown"),
-            "outputs": {},
+            "outputs": outputs,
             "already_terminal": True,
         }
         if "error" in payload:

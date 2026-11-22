@@ -44,6 +44,18 @@ def worker_fn(args):
             "failure_class": "error",
             "final_answer": f"ERROR: {e}",
             "quality_score": 0.0,
+            "grader_detail": str(e),
+            "authoring_tokens": 0,
+            # Same truthful-outcome keys as run_public_bench.run_trial,
+            # zeroed out: the serialized trial schema stays identical.
+            "finish_reason": "",
+            "truncated": False,
+            "cap_exhausted": False,
+            "output_token_cap": 0,
+            "empty_response": False,
+            "retries": 0,
+            "retry_history": [],
+            "request_params": {},
             "verified_logical_steps": 0,
             "typed_refs_produced": 0,
             "repeated_refs": 0,
@@ -137,8 +149,27 @@ def main():
             parts.append(f"{'--':>8s}")
     print(" | ".join(parts))
 
-    results_dir = Path(__file__).parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    # Save into a fresh, exclusive run directory (never a fixed path at
+    # the results root, which previously overwrote earlier runs) with a
+    # configuration/source manifest. The printed table is unchanged.
+    from outdir import make_run_dir, write_manifest
+    results_dir = make_run_dir("public-bench-parallel")
+    write_manifest(
+        results_dir,
+        config={
+            "runner": "run_parallel_bench.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "arms": list(ARMS),
+            "trials_per_task": TRIALS_PER_TASK,
+            "n_workers": N_WORKERS,
+            "seed": SEED,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "run_public_bench.py",
+            Path(__file__).parent / "runner_classic.py",
+        ],
+    )
     with open(results_dir / "public_benchmarks.json", "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)
     print(f"\nResults saved to {results_dir}/public_benchmarks.json")

@@ -23,7 +23,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from run_public_bench import grade_task, load_skill
 from run_single_bench import load_single_benchmark
-from runner_classic import run as run_classic
+from runner_classic import (
+    grading_outcome,
+    outcome_fields,
+    run as run_classic,
+)
 from tahoe.vm_mode import VMExecutor
 
 ARMS = ("classic", "tahoe", "vm")
@@ -75,6 +79,16 @@ def run_trial(task: dict, arm: str, skill_prompt: str) -> dict:
                 "final_answer": model_answer,
                 "quality_score": 0.0,
                 "grader_detail": "",
+                # Same truthful-outcome keys as the classic/tahoe arm,
+                # zeroed out: the serialized trial schema stays identical.
+                "finish_reason": "",
+                "truncated": False,
+                "cap_exhausted": False,
+                "output_token_cap": 0,
+                "empty_response": False,
+                "retries": 0,
+                "retry_history": [],
+                "request_params": {},
                 "vm_ok": vm.ok,
                 "vm_error": vm.error,
                 "compile_attempts": vm.compile_attempts,
@@ -108,13 +122,29 @@ def run_trial(task: dict, arm: str, skill_prompt: str) -> dict:
                 "total_tokens": result.total_tokens,
                 "wall_seconds": result.wall_seconds,
                 "passed": False,
-                "failure_class": "none",
+                "failure_class": getattr(result, "failure_class", "none"),
                 "final_answer": model_answer,
                 "quality_score": 0.0,
                 "grader_detail": "",
+                # Preserve the runner's truthful trial outcome: finish
+                # reason, truncation, empty-response status, retry
+                # history/count and the complete first-request generation
+                # parameters.
+                **outcome_fields(result),
             }
-        passed, detail = grade_task(task, model_answer)
+        grader_passed, detail = grade_task(task, model_answer)
+        # Truthful outcome capture (shared policy from runner_classic): a
+        # non-"none" failure class (vm_error, api_error, ...) is preserved
+        # verbatim and cannot grade into a pass; a token-limit-capped
+        # answer that fails grading is "truncated", not ordinary
+        # wrong_answer.
+        passed, failure_class = grading_outcome(
+            trial.get("failure_class", "none"),
+            grader_passed,
+            trial.get("finish_reason", ""),
+        )
         trial["passed"] = passed
+        trial["failure_class"] = failure_class
         trial["grader_detail"] = detail
         trial["quality_score"] = 1.0 if passed else 0.0
         return trial
@@ -125,7 +155,12 @@ def run_trial(task: dict, arm: str, skill_prompt: str) -> dict:
             "total_tokens": 0, "wall_seconds": time.time() - t0,
             "passed": False, "failure_class": "error",
             "final_answer": f"ERROR: {exc}", "quality_score": 0.0,
-            "grader_detail": str(exc),
+            "grader_detail": str(exc), "authoring_tokens": 0,
+            # Same truthful-outcome keys as a successful trial, zeroed out:
+            # the serialized trial schema stays identical either way.
+            "finish_reason": "", "truncated": False, "cap_exhausted": False,
+            "output_token_cap": 0, "empty_response": False,
+            "retries": 0, "retry_history": [], "request_params": {},
         }
 
 
@@ -191,8 +226,28 @@ def main():
               f"deterministic steps: {sum(t.get('deterministic_steps', 0) for t in vm_trials)}; "
               f"llm steps: {sum(t.get('llm_steps', 0) for t in vm_trials)}")
 
-    results_dir = Path(__file__).parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    # Save into a fresh, exclusive run directory (never a fixed path at
+    # the results root) with a configuration/source manifest.
+    from outdir import make_run_dir, write_manifest
+    results_dir = make_run_dir(f"vm-pilot-{bench_name}")
+    write_manifest(
+        results_dir,
+        config={
+            "runner": "run_vm_bench.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "benchmark": bench_name,
+            "n_samples": n_samples,
+            "arms": list(ARMS),
+            "trials_per_task": TRIALS_PER_TASK,
+            "n_workers": n_workers,
+            "seed": SEED,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "runner_classic.py",
+            Path(__file__).parent / "run_public_bench.py",
+        ],
+    )
     out_file = results_dir / f"vm_pilot_{bench_name}.json"
     with open(out_file, "w") as f:
         json.dump(trials, f, indent=2, sort_keys=True)

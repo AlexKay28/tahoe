@@ -22,20 +22,26 @@ language/
     ├── cot.txt  cod.txt  tot.txt  react.txt
 ```
 
-## Design law (do not break)
+## Design hypothesis and output-contract confound
 
-**A reasoning language must shape thought, never constrain output.**
+TAHOE is designed to shape reasoning without exposing its notation in the
+visible answer. The canonical skill nevertheless explicitly constrains that
+answer: its final sentence says `Output only the answer.` Archived prompt
+results therefore measure the **structure + answer-only bundle**; they do not
+show that the model internally used typed commitments or isolate structure
+from forced brevity. The controlled factorial that separates these components
+is prepared but has not been run (`docs/PREREGISTRATION-structure-answer.md`).
 
-The skills are thinking disciplines: the model reasons with typed commitments
-and protocols internally, and its visible answer shrinks to the answer itself.
-Forcing the notation into the visible output measurably decreases quality and
-increases tokens (see `insights/compact-language.md`; the explicit-notation
-negative artifact is kept in `skills/variants/triz-explicit.txt`).
+The explicit-notation variant measurably decreased quality and increased
+tokens (see `insights/compact-language.md`; its negative artifact is kept in
+`skills/variants/triz-explicit.txt`). That is evidence against that particular
+visible-notation contract, not a general law against every output contract.
 
-## Skill-size insensitivity
+## Skill-size ablation
 
-Quality is insensitive to skill size (33–162 words ≈ same results); the
-discipline carries the effect, not the wording. The canonical skill is 93
+Stored-grade results were similar across the tested 33–162-word skills. This
+size ablation does not identify the active mechanism: structure, shared output
+contracts, and generic brevity remain confounded. The canonical skill is 93
 tokens.
 
 ## Contract with the runtime

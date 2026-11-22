@@ -31,7 +31,11 @@ from run_public_bench import (
     grade_task,
     extract_model_number,
 )
-from runner_classic import run as run_classic
+from runner_classic import (
+    grading_outcome,
+    outcome_fields,
+    run as run_classic,
+)
 from metrics import count_typed_refs, compute_all_metrics
 
 # -- Configuration -------------------------------------------------------
@@ -98,6 +102,16 @@ def run_ablation_trial(task, arm, system_prompt, trial_idx):
         system_prompt=system_prompt,
     )
     passed, detail = grade_task(task, result.final_answer)
+    # Truthful outcome capture (shared policy from runner_classic): the
+    # runner's failure class is preserved verbatim and can never grade
+    # into a pass; a token-limit-capped answer that fails grading is
+    # "truncated", not an ordinary wrong_answer. The grader itself is
+    # untouched and stays arm-agnostic.
+    passed, failure_class = grading_outcome(
+        getattr(result, "failure_class", "none"),
+        passed,
+        getattr(result, "finish_reason", ""),
+    )
 
     ref_counts = count_typed_refs(result.final_answer)
     metrics = compute_all_metrics({
@@ -121,10 +135,14 @@ def run_ablation_trial(task, arm, system_prompt, trial_idx):
         "total_tokens": result.total_tokens,
         "wall_seconds": result.wall_seconds,
         "passed": passed,
-        "failure_class": "none" if passed else "wrong_answer",
+        "failure_class": failure_class,
         "final_answer": result.final_answer,
         "quality_score": 1.0 if passed else 0.0,
         "grader_detail": detail,
+        # Preserve the runner's truthful trial outcome: finish reason,
+        # truncation, empty-response status, retry history/count and the
+        # complete first-request generation parameters.
+        **outcome_fields(result),
         "verified_logical_steps": ref_counts["verified_logical_steps"],
         "typed_refs_produced": ref_counts["typed_refs_produced"],
         "repeated_refs": ref_counts["repeated_refs"],
@@ -281,6 +299,16 @@ def main():
                 "final_answer": f"ERROR: {e}",
                 "quality_score": 0.0,
                 "grader_detail": str(e),
+                # Same truthful-outcome keys as run_ablation_trial,
+                # zeroed out: the serialized trial schema stays identical.
+                "finish_reason": "",
+                "truncated": False,
+                "cap_exhausted": False,
+                "output_token_cap": 0,
+                "empty_response": False,
+                "retries": 0,
+                "retry_history": [],
+                "request_params": {},
                 "verified_logical_steps": 0,
                 "typed_refs_produced": 0,
                 "repeated_refs": 0,
@@ -321,9 +349,29 @@ def main():
                 parts.append(f"{'--':>8s}")
         print(" | ".join(parts))
 
-    # Save results
-    results_dir = Path(__file__).parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    # Save results into a fresh, exclusive run directory (never a fixed
+    # path at the results root) with a configuration/source manifest.
+    from outdir import make_run_dir, write_manifest
+    results_dir = make_run_dir("prompt-ablation")
+    write_manifest(
+        results_dir,
+        config={
+            "runner": "run_prompt_ablation.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "arms": list(ABLATION_ARMS),
+            "trials_per_task": TRIALS_PER_TASK,
+            "max_turns": 1,
+            "max_tokens": 2048,
+            "timeout_seconds": 60,
+            "seed": SEED,
+            "max_samples_per_bench": MAX_SAMPLES_PER_BENCH,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "runner_classic.py",
+            Path(__file__).parent / "metrics.py",
+        ],
+    )
     with open(results_dir / "prompt_ablation.json", "w") as f:
         json.dump({"trials": all_trials, "pareto": rows}, f, indent=2, sort_keys=True)
     print(f"\nResults saved to {results_dir}/prompt_ablation.json")

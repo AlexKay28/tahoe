@@ -947,6 +947,7 @@ class ExternalDriver:
     def _start_run(self, plan: list) -> None:
         """Fresh-start the run with the coordinator's exact event prefix."""
         from tahoe.registry.registry import registry_digest
+        from tahoe.syntax import seal_digest
 
         digest = registry_digest(self.registry)
         self.store.create_run(
@@ -954,12 +955,17 @@ class ExternalDriver:
             f"{self.program.name}@{self.program.version}",
             metadata={"program": self.program.name, "registry_digest": digest},
         )
+        # The canonical program seal is recorded exactly like the
+        # coordinator's RUN_STARTED (seal_digest(self.program), not the
+        # caller-provided --seal copy) so a resumed external run verifies
+        # its seal by default like any coordinator-driven run.
         self.store.append(
             self.run_id,
             EventType.RUN_STARTED,
             payload={
                 "program": self.program.name,
                 "version": self.program.version,
+                "seal_digest": seal_digest(self.program),
                 "registry_digest": digest,
             },
         )

@@ -31,6 +31,31 @@ its directory into a dated study folder under `results/` (see
 - `graders.py`, `stats.py`, `metrics.py`, `report.py`, `token_proxy.py`
 - `outdir.py` — run-directory helper.
 
+## Offline derived-results tooling (no model calls)
+
+The Stage-1 publication evidence is produced offline from the frozen raw
+archives by a three-stage pipeline — **current publication evidence:
+`results/derived/2026-11-18-stage1-full-v3/`** (index:
+`results/derived/README.md`; v2 is superseded by its GSM8K extractor-v6
+clock-form correction and v1 by the v5 restatement fix — both preserved
+unchanged):
+
+1. **Regrade** — `fix_stage1_extraction.py` (CLI, required
+   `--input <raw archive> --output <fresh derived artifact>`;
+   helper pipeline `stage1_regrade.py`): re-grades all ten Stage-1
+   benchmarks with the current graders, into a separate derived artifact.
+   Read-only input, exclusive-create output, grader sha-256 pinned.
+   GSM8K-only variant: `fix_gsm8k_extraction.py` (helper `gsm8k_regrade.py`).
+2. **Canonical statistics** — `canonical_results.py`: deterministic
+   per-model JSON+Markdown from a derived artifact; labeled micro/macro
+   estimands; truncation/cap/empty outcomes from recorded fields only;
+   keyed task-cluster paired comparisons with Holm correction; refuses
+   overwrite.
+3. **Doc rendering** — `render_canonical_docs.py`: renders Markdown/LaTeX
+   blocks from a canonical payload; updates marked generated blocks in docs
+   (`--update PATH`) and verifies them (`--check PATH`). Docs never
+   hand-maintain numbers that a payload can generate.
+
 ## Environment
 
 ```bash

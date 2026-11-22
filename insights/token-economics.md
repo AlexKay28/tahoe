@@ -11,7 +11,7 @@ per subcall = sys(~50) + step line(~25) + ref slice(~20-50) + model output(~30-6
              ≈ 145-185 tokens
 6-step program ≈ 1,100-1,300 total
 ```
-Measured baselines (full test sets, GLM-5.3-Flash):
+Measured baselines (the exact Stage-1 benchmark slices in `docs/EVALUATION.md`, GLM-5.3-Flash):
 ```
 classic      ≈ 246 avg output tokens
 prompt-tahoe ≈ 125 avg output tokens

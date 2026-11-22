@@ -44,6 +44,7 @@ Issue #41 extensions:
 from __future__ import annotations
 
 import dataclasses
+import math
 import threading
 import time
 
@@ -91,6 +92,7 @@ class ExecutionBudget:
             if value is not None and (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
+                or not math.isfinite(value)
                 or value <= 0
             ):
                 raise ValueError(
@@ -117,6 +119,7 @@ class ExecutionBudget:
         if self.max_total_cost is not None and (
             isinstance(self.max_total_cost, bool)
             or not isinstance(self.max_total_cost, (int, float))
+            or not math.isfinite(self.max_total_cost)
             or self.max_total_cost < 0
         ):
             raise ValueError(

@@ -210,19 +210,47 @@ def test_audit_detects_succeeded_after_failed(tmp_path):
     with EventStore(str(tmp_path / "events.db")) as store:
         _execute(store, RAISE_PROGRAM, handlers=_boom_handlers())
         failed = _events_of_type(store, RUN_ID, EventType.FAILED)[0]
-        injected = store.append(
-            RUN_ID,
-            EventType.SUCCEEDED,
-            instruction_id=failed.instruction_id,
-            invocation_id=failed.invocation_id,
-            task_id=failed.task_id,
-            payload={},
+        # One-way terminal transitions: the store now rejects a
+        # SUCCEEDED rewrite of a FAILED invocation at append time.
+        from tahoe.runtime.events import StateVersionConflict
+
+        with pytest.raises(StateVersionConflict):
+            store.append(
+                RUN_ID,
+                EventType.SUCCEEDED,
+                instruction_id=failed.instruction_id,
+                invocation_id=failed.invocation_id,
+                task_id=failed.task_id,
+                payload={},
+            )
+        # The audit finding remains for legacy histories recorded
+        # before the append-time guard: such rows can only be produced
+        # by tampering with the store directly.
+        events = store.events(RUN_ID)
+        store._conn.execute(
+            "INSERT INTO events (run_id, seq, program_version, event_type,"
+            " instruction_id, invocation_id, task_id, causation_seq,"
+            " correlation_id, attempt, state_version, payload_ref,"
+            " payload, occurred_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, NULL,"
+            " NULL, ?)",
+            (
+                RUN_ID,
+                len(events),
+                events[-1].program_version,
+                EventType.SUCCEEDED.value,
+                failed.instruction_id,
+                failed.invocation_id,
+                failed.task_id,
+                failed.state_version,
+                events[-1].occurred_at.isoformat(),
+            ),
         )
         report = audit_run(store, RUN_ID)
         assert not report.ok
         finding = _finding(report, "succeeded_after_failed")
         assert failed.seq in finding.seqs
-        assert injected.seq in finding.seqs
+        assert len(events) in finding.seqs
 
 
 def test_audit_detects_second_run_finished(tmp_path):

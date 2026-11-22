@@ -1,0 +1,195 @@
+# Preregistered TAHOE-structure x answer-only factorial experiment — configuration.
+#
+# Preregistration: docs/PREREGISTRATION-structure-answer.md
+# Runner:          benchmarks/run_structure_ablation.py
+# Power analysis:  benchmarks/structure_answer_power.py
+#                  (generated artifact: benchmarks/structure-answer-power.json)
+#
+# This experiment is ISOLATED from the prompt-ablation family (#89): it shares
+# only the arm-invariant grader/answer-extraction helpers from run_public_bench
+# and the truthful-outcome capture of runner_classic. It changes no existing
+# runner, prompt, or archived result.
+#
+# Question: is TAHOE-93's measured benefit due to its STRUCTURE, or to its
+# final answer-only OUTPUT CONTRACT? The 2x2 core is structure (none / TAHOE)
+# x contract (absent / present); the TAHOE-free generic_structure arm is an
+# ADDED control on top of that core, and cod is a concise-CoT control.
+#
+# SAMPLE SIZE: 70 samples x 10 benchmarks = 700 tasks -> 700 x 6 arms x 2
+# regimes x 3 trials = 25,200 planned trials. Chosen by the pre-run power
+# analysis at the Holm-first-step (Bonferroni) per-comparison alpha of the
+# actual multiplicity families: 700 tasks makes the 0.05 non-inferiority
+# margin confirmatory (>= 80% one-sided power) for every sd_d up to and
+# including the independent-arm sensitivity bound sqrt(1/(2*3)) = 0.408
+# (84% at the bound itself, ~94% at the archived per-benchmark empirical
+# max 0.351, ~100% at the planning SD 0.25), and the pooled H2 bbh-family
+# cluster (210 tasks) confirmatory for delta=0.10 up to the same bound
+# (~82%). The valid distribution-free PAIRED worst case sqrt(1/3) = 0.577
+# (perfectly anti-correlated arm outcomes) is NOT covered for
+# non-inferiority or cluster POWER (~52% / ~45%) — an explicit,
+# preregistered downgrade, not a hidden one. Precision (95% CI half-width
+# < 0.05) and the two-sided comparisons at delta >= 0.10 hold even at that
+# bound. See the power artifact for the full transparent calculation.
+
+experiment: structure-answer
+runner: run_structure_ablation.py
+preregistration: docs/PREREGISTRATION-structure-answer.md
+
+seed: 42
+trials_per_task: 3
+
+# Arms (presentation and analysis order). Exact prompt relationships:
+#   classic          — no system prompt ("")
+#   answer_only      — the canonical TAHOE-93 final output-contract sentence
+#                      alone (verified equal to answer-only.txt)
+#   generic_structure— TAHOE-free structured outline + the same output
+#                      contract (generic-structure.txt; no TAHOE vocabulary)
+#   tahoe_structure  — canonical TAHOE-93 with ONLY its final output-contract
+#                      sentence removed (derived in code, byte-exact guard)
+#   tahoe_full       — canonical TAHOE-93 text, byte-exact (language/skills/
+#                      tahoe-93.txt)
+#   cod              — concise-CoT / Chain-of-Draft control (language/baselines/
+#                      cod.txt)
+arms:
+  - classic
+  - answer_only
+  - generic_structure
+  - tahoe_structure
+  - tahoe_full
+  - cod
+
+# Two explicitly configured output-budget regimes. The ONLY regime-level
+# difference is max_tokens; every other generation parameter comes from the
+# shared `generation` block below and is identical across all arms and regimes.
+regimes:
+  constrained:
+    max_tokens: 256       # tight budget: truncation pressure is the treatment
+  adequate:
+    max_tokens: 4096      # larger budget, expected to make truncation RARE —
+                          # NOT a guarantee. Residual truncation under this
+                          # regime is measured per arm (finish_reason="length"
+                          # rate, empty-response counts) and reported as a
+                          # mandatory outcome; accuracy claims are interpreted
+                          # together with the measured truncation rate.
+
+# Generation settings shared by every arm in every regime. No per-arm
+# overrides exist or are permitted: the ONLY arm-level difference is the
+# system prompt.
+generation:
+  max_turns: 1
+  timeout_seconds: 90
+  temperature: 0.0
+  top_p: 1.0
+
+# Cost model for the cost-per-success endpoint (USD per 1M tokens).
+cost:
+  input_per_mtok: 0.60
+  output_per_mtok: 2.00
+
+# Primary task set: the same ten HF benchmarks as the archived ablations, at
+# the per-benchmark sample counts required by the pre-run power analysis.
+# The loader (structure_answer_tasks.py) honors these counts, drawing
+# min(k, dataset_size) tasks per benchmark with deterministic, nested
+# sampling (seed-keyed per benchmark; k=10 sets are subsets of k=70 sets).
+benchmarks:
+  - gsm8k
+  - arc
+  - bbh
+  - bbh_track
+  - bbh_arith
+  - mmlu_math
+  - mmlu_logic
+  - mmlu_acct
+  - lsat
+  - race
+samples_per_benchmark:
+  gsm8k: 70
+  arc: 70
+  bbh: 70
+  bbh_track: 70
+  bbh_arith: 70
+  mmlu_math: 70
+  mmlu_logic: 70
+  mmlu_acct: 70
+  lsat: 70
+  race: 70
+
+# Confirmatory comparisons (two-sided, paired by (benchmark, task_id, trial),
+# repeated trials aggregated to per-task means — the task-macro estimand —
+# before testing). A third element scopes a comparison to a benchmark
+# cluster: H2 is tested on the POOLED reasoning cluster (bbh + bbh_track +
+# bbh_arith; bbh_arith is the arithmetic proxy — AIME is excluded from the
+# primary set). The scope must equal power.h2_cluster.benchmarks exactly
+# (validated), so the analysis and the power calculation describe the same
+# test. Holm families: m = 6 per (regime, endpoint) — five global
+# comparisons plus the scoped cluster comparison.
+comparisons:
+  - [answer_only, classic]          # effect of the output contract alone
+  - [tahoe_structure, classic]     # effect of TAHOE structure alone
+  - [generic_structure, answer_only]  # generic structure vs none, contract fixed
+  - [tahoe_full, answer_only, [bbh, bbh_track, bbh_arith]]  # H2: TAHOE structure on top of the contract, pooled reasoning cluster (confirmatory)
+  - [tahoe_full, tahoe_structure]   # contract on top of TAHOE structure
+  - [cod, classic]                  # concise-CoT control vs baseline
+
+# Exploratory comparisons: reported with unadjusted p-values, NEVER in a
+# Holm family, never confirmatory. Only the global counterpart of a scoped
+# confirmatory comparison is permitted here (validated).
+exploratory_comparisons:
+  - [tahoe_full, answer_only]       # global counterpart of the H2 cluster test
+
+# Holm correction families (family-wise error control within each family):
+#   (regime, endpoint=success) for the six comparisons above,
+#   (regime, endpoint=total_tokens) for the same six comparisons,
+#   (regime, endpoint=noninferiority) for the tests below.
+# Planning power is computed at the Bonferroni / Holm-first-step alpha/m of
+# these family sizes (m=4 for non-inferiority, m=6 for comparisons).
+holm_families:
+  - {regime: constrained, endpoint: success}
+  - {regime: adequate, endpoint: success}
+  - {regime: constrained, endpoint: total_tokens}
+  - {regime: adequate, endpoint: total_tokens}
+  - {regime: constrained, endpoint: noninferiority}
+  - {regime: adequate, endpoint: noninferiority}
+
+# Quality non-inferiority: is each cheaper/flatter arm within `margin`
+# absolute success-rate points of full TAHOE-93? One-sided paired test on
+# per-task mean success, alpha as below, Holm-corrected within each regime.
+noninferiority:
+  reference_arm: tahoe_full
+  candidates:
+    - answer_only
+    - generic_structure
+    - tahoe_structure
+    - cod
+  margin: 0.05
+  alpha: 0.05
+
+# Pre-run precision/power inputs (see benchmarks/structure_answer_power.py
+# and the generated benchmarks/structure-answer-power.json).
+# planning_sd is the preregistered planning value for the per-task paired
+# success-difference SD: rounded up ~34% from the archived pooled empirical
+# maximum (0.187 across the pairs below), below the archived per-benchmark
+# maximum (0.351) and below the independent-arm sensitivity bound
+# sqrt(1/(2*3)) = 0.408. Confirmatory power is evaluated at the
+# Bonferroni/Holm-first-step alpha/m of the actual families, at every SD
+# scenario including the valid paired worst case sqrt(1/3) = 0.577.
+power:
+  planning_sd: 0.25
+  target_power: 0.80
+  sensitivity_delta: 0.10   # two-sided effect size used for comparison power
+  archive_sources:
+    - benchmarks/results/2026-09-14-skill-study/prompt_ablation.json
+  archive_pairs:
+    - [93, classic]
+    - [93, 50]
+    - [93, 150]
+    - [93, 200]
+    - [150, classic]
+  h2_cluster:
+    comparison: [tahoe_full, answer_only]   # must match the scoped comparison
+    benchmarks: [bbh, bbh_track, bbh_arith] # must match its scope exactly
+    delta: 0.10
+
+stats:
+  n_resamples: 10000
+  n_permutations: 10000

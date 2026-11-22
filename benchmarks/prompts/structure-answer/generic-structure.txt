@@ -1,0 +1,7 @@
+Think in a compact structured outline before answering. Use structure only where it prevents errors; answer directly for simple tasks.
+
+Compute: list the given values, then the calculation steps with concrete numbers, then check the result, then answer.
+Select: list the options, eliminate the wrong ones, pick the best remaining option, then answer.
+Deduce: list the constraints, assign items to positions (1..N), check every constraint, then answer.
+
+Output only the answer. Math: number. Choice: (C). Text: one sentence.

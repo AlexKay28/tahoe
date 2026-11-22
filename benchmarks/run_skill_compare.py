@@ -14,7 +14,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from run_public_bench import grade_task
 from run_single_bench import load_single_benchmark
-from runner_classic import run as run_classic
+from runner_classic import (
+    grading_outcome,
+    outcome_fields,
+    run as run_classic,
+)
 
 
 def load_skills(names):
@@ -45,22 +49,43 @@ def _worker(args):
                 time.sleep(2 ** attempt)
                 continue
             passed, detail = grade_task(task, r.final_answer)
+            # Truthful outcome capture (shared policy from runner_classic):
+            # the runner's failure class is preserved verbatim and can never
+            # grade into a pass; a token-limit-capped answer that fails
+            # grading is "truncated", not an ordinary wrong_answer.
+            passed, failure_class = grading_outcome(
+                getattr(r, "failure_class", "none"),
+                passed,
+                getattr(r, "finish_reason", ""),
+            )
             return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
-                    "passed": passed, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
+                    "passed": passed, "failure_class": failure_class,
+                    "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
                     "wall_seconds": time.time() - t0, "final_answer": r.final_answer,
-                    "grader_detail": detail}
+                    "grader_detail": detail,
+                    **outcome_fields(r)}
         except Exception as e:
             msg = str(e)
             if ("429" in msg or "inflight" in msg or "rate" in msg.lower()) and attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
                 continue
             return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
-                    "passed": False, "input_tokens": 0, "output_tokens": 0,
+                    "passed": False, "failure_class": "error",
+                    "input_tokens": 0, "output_tokens": 0,
                     "wall_seconds": time.time() - t0, "final_answer": f"ERROR: {e}",
-                    "grader_detail": msg}
+                    "grader_detail": msg,
+                    "finish_reason": "", "truncated": False, "cap_exhausted": False,
+                    "output_token_cap": 0, "empty_response": False,
+                    "retries": attempt, "retry_history": [],
+                    "request_params": {}}
     return {"task_id": task["task_id"], "benchmark": task["benchmark"], "arm": arm,
-            "passed": False, "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0,
-            "final_answer": "ERROR: retries exhausted", "grader_detail": "rate limited"}
+            "passed": False, "failure_class": "error",
+            "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0,
+            "final_answer": "ERROR: retries exhausted", "grader_detail": "rate limited",
+            "finish_reason": "", "truncated": False, "cap_exhausted": False,
+            "output_token_cap": 0, "empty_response": False,
+            "retries": max_retries, "retry_history": [],
+            "request_params": {}}
 
 
 def main():
@@ -107,8 +132,24 @@ def main():
         t, s = stats["skill_prompt"], stats["triz"]
         print(f"triz vs tahoe:   quality {100*(s['pass']-t['pass']):+.1f}pp, out tokens {s['out']/t['out']:.2f}x")
 
-    from outdir import make_run_dir
+    from outdir import make_run_dir, write_manifest
     out_dir = make_run_dir(f"skill-cmp-{bench}")
+    write_manifest(
+        out_dir,
+        config={
+            "runner": "run_skill_compare.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "benchmark": bench,
+            "n_samples": n,
+            "arms": [a for a, _ in arms],
+            "n_workers": workers,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "runner_classic.py",
+            Path(__file__).parent / "run_public_bench.py",
+        ],
+    )
     out_file = out_dir / "trials.json"
     with open(out_file, "w") as f:
         json.dump(trials, f, indent=2)

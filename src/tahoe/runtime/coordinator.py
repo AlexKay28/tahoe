@@ -41,6 +41,7 @@ from tahoe.syntax import (
     load_protocol,
     parse_condition,
     parse_program,
+    seal_digest,
     validate_program,
 )
 from tahoe.syntax.model import (
@@ -141,6 +142,9 @@ from tahoe.runtime.helpers import (  # noqa: E402,F401
     _uses_loop,
     _uses_try,
     _uses_reformulate,
+    _uses_first,
+    _uses_await,
+    _uses_approve,
     _invocation_uses_kb_refs,
     _json_equal,
     evaluate_done_predicate,
@@ -295,11 +299,10 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         create_records: list[_Record] = []
         create_ledger = self.store.task_ledger(run_id)
         for idx, entry in enumerate(plan):
-            if entry.condition is not None:
-                # Issue #3: conditional entries are not part of the up-front
-                # creation batch — a false branch performs no work, so its
-                # ledger task exists only when the condition fires (created
-                # lazily in _drive_plan).
+            if entry.condition is not None or entry.else_condition is not None:
+                # Conditional entries (including ELSE) are not part of the
+                # up-front creation batch — an unselected branch performs no
+                # work, so its ledger task exists only when selected.
                 continue
             if entry.par is not None:
                 # Issue #24: a PAR block creates no task of its own — the
@@ -425,7 +428,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         self.store.append(
             run_id,
             EventType.RUN_FINISHED,
-            payload={"status": "succeeded"},
+            payload={"status": "succeeded", "outputs": outputs},
         )
         return {"run_id": run_id, "status": "succeeded", "outputs": outputs}
 
@@ -681,6 +684,7 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         started_payload: dict[str, Any] = {
             "program": program.name,
             "version": program.version,
+            "seal_digest": seal_digest(program),
             "registry_digest": registry_digest,
         }
         concurrent_run = (
@@ -691,6 +695,9 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             and not _uses_loop(program)
             and not _uses_try(program)
             and not _uses_reformulate(program)
+            and not _uses_first(program)
+            and not _uses_await(program)
+            and not _uses_approve(program)
         )
         if concurrent_run:
             metadata["concurrent"] = True
@@ -704,7 +711,12 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             # sequential plan loop — a PAR entry brings its own bounded
             # branch pool.  Issue #25: delegate programs drive the
             # sequential loop for the same reason — a delegate entry brings
-            # its own authoring + child-run machinery.
+            # its own authoring + child-run machinery.  Issues #76/#77/#78:
+            # FIRST, AWAIT and APPROVE programs likewise drive the
+            # sequential loop — their entries carry the event-wait /
+            # approval-gate semantics the plan frontier does not model, so
+            # they keep the supported sequential semantics with the width
+            # recorded (never a frontier crash relabeled as a run failure).
             metadata["max_workers"] = max_workers
         if child_of is not None:
             metadata["child_of"] = child_of
@@ -846,6 +858,10 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 candidate_success_ids.add(invocation)
             elif _PAR_INVOCATION_RE.fullmatch(invocation):
                 continue
+            elif re.fullmatch(r"inv-\d+\.iter\d+\..+", invocation):
+                # LOOP/FIRST body invocations are nested under their plan
+                # entry; the outer sequential prefix is driven separately.
+                continue
             else:
                 positional_success_ids.add(invocation)
         scatter_positions = {
@@ -899,12 +915,19 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
         task_ids = list(ledger.tasks)
         static_positions = [
             idx for idx, entry in enumerate(plan)
-            if entry.par is None and entry.loop is None and entry.try_ is None
-            if entry.par is None and entry.loop is None
+            if entry.condition is None
+            and entry.else_condition is None
+            and entry.par is None
+            and entry.loop is None
+            and entry.try_ is None
             and entry.reformulate is None
             and entry.first is None
             and entry.await_ is None
             and entry.approve is None
+        ]
+        lazy_positions = [
+            idx for idx, entry in enumerate(plan)
+            if entry.condition is not None or entry.else_condition is not None
         ]
         if len(task_ids) > len(static_positions):
             # Issue #4: tasks beyond the plan's own entries are per-candidate
@@ -934,11 +957,32 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
                 for _entry in plan
                 if _entry.par is not None
             ]
+            lazy_task_texts = {
+                self._task_text(plan[plan_idx]) for plan_idx in lazy_positions
+            }
+            loop_body_text_res = [
+                re.compile(
+                    rf"^{re.escape(body.step_id)}: DO [a-z][a-z0-9_]*"
+                    rf" \[LOOP iteration \d+\]$"
+                )
+                for loop_entry in plan
+                for body in (
+                    (loop_entry.loop.body if loop_entry.loop is not None else ())
+                    + (loop_entry.first.body if loop_entry.first is not None else ())
+                )
+                if isinstance(body, Invocation)
+            ]
             for extra_id in task_ids[len(static_positions):]:
                 text = ledger.tasks[extra_id].text
-                if not any(
-                    pattern.fullmatch(text)
-                    for pattern in candidate_text_res + par_branch_text_res
+                if (
+                    text not in lazy_task_texts
+                    and not any(
+                        pattern.fullmatch(text)
+                        for pattern in (
+                            candidate_text_res + par_branch_text_res
+                            + loop_body_text_res
+                        )
+                    )
                 ):
                     raise ValueError(
                         f"run {run_id!r} has {len(task_ids)} tasks but the"
@@ -982,6 +1026,12 @@ class SequentialCoordinator(ChildEngine, ParEngine, ScatterEngine, DelegateEngin
             static_positions[position]: task_id
             for position, task_id in enumerate(task_ids[: len(static_positions)])
         }
+        for plan_idx in lazy_positions:
+            expected_text = self._task_text(plan[plan_idx])
+            for task_id in task_ids[len(static_positions):]:
+                if ledger.tasks[task_id].text == expected_text:
+                    statement_to_task[plan_idx] = task_id
+                    break
 
         if concurrent_run:
             resume_workers = max_workers if max_workers > 1 else int(

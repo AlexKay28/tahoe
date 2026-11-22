@@ -1,0 +1,341 @@
+{
+  "fixture_version": 1,
+  "kind": "curated-grader-review-fixture",
+  "curation_note": "CURATED REVIEW FIXTURE - not independent human annotation. Rows were hand-curated by the grading-fix author from archived evaluation outputs (verbatim model answers, cited per row) and from the failure modes repaired alongside them. Expected verdicts reflect the task manifests and benchmark answer conventions, and every rationale states why the verdict is what it is so a reviewer can audit or challenge each label. Synthetic rows are explicitly marked as such and never cite an archive.",
+  "graded_by": {
+    "numeric": "benchmarks/graders.py NumericGrader (manifest grader type 'numeric')",
+    "gsm8k": "benchmarks/run_public_bench.py grade_task -> grade_gsm8k (v4 extractor)",
+    "arc": "benchmarks/run_public_bench.py grade_task -> grade_arc (label-aware)",
+    "mmlu": "benchmarks/run_public_bench.py grade_task -> grade_mmlu",
+    "lsat": "benchmarks/run_public_bench.py grade_task -> grade_lsat",
+    "bbh": "benchmarks/run_public_bench.py grade_task -> grade_bbh"
+  },
+  "arm_note": "arm is provenance metadata for review coverage (concise and verbose answers from both arms). Graders are arm-agnostic by design and never receive the arm; the same code path grades every arm.",
+  "field_note": "expected_state: NumericGrader manifest state; expected: benchmark gold (gsm8k gold text carries the official '#### N' marker; mmlu expected is the 0-3 choice index; arc/lsat/bbh expected is the answerKey/letter; arc rows may carry the displayed choice labels); expected_verdict: the verdict a correct grader must produce; archive_ref: pointer to the verbatim archived record.",
+  "rows": [
+    {
+      "id": "plan-01-classic-verbose-eight-fail",
+      "grader": "numeric",
+      "arm": "classic",
+      "source": "benchmarks/tasks/plan-01.yaml (expected value 5); archived answer from benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+      "model_answer": "**Ordered subtasks for \"Deploy a web app to production\":**\n\n1. Run final tests and code review on the release branch\n2. Build the production bundle/artifacts\n3. Configure production environment variables and secrets\n4. Provision or verify production infrastructure (servers, database, DNS, TLS certificates)\n5. Run database migrations\n6. Deploy the application (via CI/CD pipeline or deployment script)\n7. Perform post-deployment smoke tests and health checks\n8. Monitor logs and metrics; roll back if critical issues appear\n\n**Number of subtasks: 8**",
+      "expected_verdict": false,
+      "rationale": "The model's declared final count is 8 ('**Number of subtasks: 8**'), but the task manifest pins 5. The digit '5' appears only as a list index ('5. Run database migrations'), which the old expected-occurs-anywhere NumericGrader wrongly credited (archived passed=true). The final-answer extractor must read the declared count and fail here.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+        "task_id": "plan-01",
+        "arm": "classic",
+        "trial": 3
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "found expected number 5",
+      "expected_state": {
+        "value": 5
+      }
+    },
+    {
+      "id": "plan-01-tahoe-concise-five-pass",
+      "grader": "numeric",
+      "arm": "tahoe",
+      "source": "benchmarks/tasks/plan-01.yaml (expected value 5); archived answer from benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+      "model_answer": "5",
+      "expected_verdict": true,
+      "rationale": "Concise correct answer from the tahoe arm: the bare final answer '5' matches the manifest value 5, so the last-line extraction passes it.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+        "task_id": "plan-01",
+        "arm": "tahoe",
+        "trial": 1
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "found expected number 5",
+      "expected_state": {
+        "value": 5
+      }
+    },
+    {
+      "id": "routing-01-tahoe-concise-pass",
+      "grader": "numeric",
+      "arm": "tahoe",
+      "source": "benchmarks/tasks/routing-01.yaml (expected value 16); archived answer from benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+      "model_answer": "Route 3, total cost 16 units.",
+      "expected_verdict": true,
+      "rationale": "Concise tahoe-arm answer 'Route 3, total cost 16 units.': no bold span or declaration marker, so the fallback reads the last number on the last line (16), which matches. Guards against over-requiring verbose markers.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+        "task_id": "routing-01",
+        "arm": "tahoe",
+        "trial": 1
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "found expected number 16",
+      "expected_state": {
+        "value": 16
+      }
+    },
+    {
+      "id": "search-01-classic-verbose-pass",
+      "grader": "numeric",
+      "arm": "classic",
+      "source": "benchmarks/tasks/search-01.yaml (expected value 3); archived answer from benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+      "model_answer": "The word **'quantum'** appears **3 times** in the text:\n\n1. \"**quantum** mechanics\"\n2. \"**quantum** field theory\"\n3. \"**quantum** computing\"\n\nNote: \"classical mechanics\" does not contain the word 'quantum'.",
+      "expected_verdict": true,
+      "rationale": "Verbose classic-arm answer whose final count is stated in a bold span ('**3 times**'). The digits 1-3 also appear as list indices, so this row checks that the extractor reads the bold declaration, not just any occurrence of the expected digit.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+        "task_id": "search-01",
+        "arm": "classic",
+        "trial": 2
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "found expected number 3",
+      "expected_state": {
+        "value": 3
+      }
+    },
+    {
+      "id": "routing-02-tahoe-verbose-pass",
+      "grader": "numeric",
+      "arm": "tahoe",
+      "source": "benchmarks/tasks/routing-02.yaml (expected value 3); archived answer from benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+      "model_answer": "**3**\n\nEach route's total cost = distance × cost rate:\n- Route 1: 12 × 3 = 36 ✓ (under 50)\n- Route 2: 25 × 7 = 175 ✗\n- Route 3: 8 × 2 = 16 ✓\n- Route 4: 17 × 5 = 85 ✗\n- Route 5: 30 × 9 = 270 ✗\n- Route 6: 5 × 1 = 5 ✓\n\nRoutes 1, 3, and 6 satisfy the constraint → **count = 3**",
+      "expected_verdict": true,
+      "rationale": "Verbose tahoe-arm answer with a full cost table (many numbers) whose final answer is the leading bold '**3**'. Correct rows like this must keep passing after the expected-occurs-anywhere fix.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+        "task_id": "routing-02",
+        "arm": "tahoe",
+        "trial": 0
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "found expected number 3",
+      "expected_state": {
+        "value": 3
+      }
+    },
+    {
+      "id": "routing-02-classic-empty-fail",
+      "grader": "numeric",
+      "arm": "classic",
+      "source": "benchmarks/tasks/routing-02.yaml (expected value 3); archived answer from benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+      "model_answer": "",
+      "expected_verdict": false,
+      "rationale": "Truncated/empty classic-arm answer (archived grader detail: 'no number found in result'). No final answer exists, so the grader must fail rather than credit a stray digit.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-17-ablation-7tasks/trials.json",
+        "task_id": "routing-02",
+        "arm": "classic",
+        "trial": 1
+      },
+      "archived_passed": false,
+      "archived_grader_detail": "no number found in result: ''",
+      "expected_state": {
+        "value": 3
+      }
+    },
+    {
+      "id": "plan-01-label-declaration-pass",
+      "grader": "numeric",
+      "arm": "tahoe",
+      "source": "synthetic (capability demonstration for the task-specific label key in benchmarks/graders.py NumericGrader; manifest plan-01 style)",
+      "model_answer": "First draft had 7 sections.\nNumber of subtasks: 5\nShipped after review.",
+      "expected_verdict": true,
+      "rationale": "Demonstrates task-specific structured validation: the manifest pins label='Number of subtasks', so the declaration 'Number of subtasks: 5' is the answer even though a 7 appears earlier and the last line has no number. Without the label the generic chain finds no number on the last line, which is exactly why manifests can pin a label instead of relying on universal last-number behavior.",
+      "expected_state": {
+        "value": 5,
+        "label": "Number of subtasks"
+      }
+    },
+    {
+      "id": "routing-02-json-field-pass",
+      "grader": "numeric",
+      "arm": "tahoe",
+      "source": "synthetic (capability demonstration for the task-specific field key in benchmarks/graders.py NumericGrader; manifest routing-02 style)",
+      "model_answer": "{\"routes\": [1, 3, 6], \"count\": 3}",
+      "expected_verdict": true,
+      "rationale": "Structured-output variant of routing-02: the task pins field='count', so the grader reads the count field from the JSON object instead of scanning prose for numbers. Task-specific extraction keeps multi-key JSON results gradeable without unsafe universal heuristics.",
+      "expected_state": {
+        "value": 3,
+        "field": "count"
+      }
+    },
+    {
+      "id": "gsm8k-0689-tahoe-decimal-normalization-pass",
+      "grader": "gsm8k",
+      "arm": "tahoe",
+      "source": "GSM8K test item 0689; archived answer from benchmarks/results/2026-09-13-pilot/public_benchmarks_scaled.json (gold number per archived grader_detail 'expected=7'; the full gold solution text is not stored in the archive, so only the official '#### 7' marker is reproduced here)",
+      "model_answer": "$7.00",
+      "expected_verdict": true,
+      "rationale": "Archived wrong-fail: the model answered '$7.00' and the old string comparison rejected it against gold 7. Numeric normalization must accept 7.00 == 7. Same class as the 42 vs 42.00 repair.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-13-pilot/public_benchmarks_scaled.json",
+        "task_id": "gsm8k-0689",
+        "arm": "tahoe",
+        "trial": 0
+      },
+      "archived_passed": false,
+      "archived_grader_detail": "expected=7, got=7.00",
+      "expected": "#### 7"
+    },
+    {
+      "id": "gsm8k-42-vs-42-00-pass",
+      "grader": "gsm8k",
+      "arm": "classic",
+      "source": "synthetic, derived from the archived gsm8k normalization failure class (e.g. gsm8k-0689 above; gsm8k-0577 full answer in benchmarks/results/2026-09-13-stage1-full/full_test_eval.json)",
+      "model_answer": "Mack saw an average of **42.00 birds per day**.",
+      "expected_verdict": true,
+      "rationale": "The named repair case: gold '#### 42', model spells the answer 42.00. Numeric comparison must pass it; the old string compare failed.",
+      "expected": "#### 42"
+    },
+    {
+      "id": "gsm8k-1026-classic-boxed-latex-thousands-pass",
+      "grader": "gsm8k",
+      "arm": "classic",
+      "source": "GSM8K test item 1026 (gold 43200 per archived grader_detail); archived answer from benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+      "model_answer": "# Mining Calculation\n\n## Step 1: Find daily output per dwarf\n\n**Bare hands:** 12 pounds per day\n\n**Iron pickaxe:** twice as much as bare hands\n$$12 \\times 2 = 24 \\text{ pounds per day}$$\n\n**Steel pickaxe:** 50% more than iron pickaxe\n$$24 \\times 1.5 = 36 \\text{ pounds per day}$$\n\n## Step 2: Scale up to 40 dwarves\n\n$$36 \\times 40 = 1{,}440 \\text{ pounds per day}$$\n\n## Step 3: Scale up to 30 days\n\n$$1{,}440 \\times 30 = \\boxed{43{,}200 \\text{ pounds of ore}}$$",
+      "expected_verdict": true,
+      "rationale": "Archived extraction bug: '\\boxed{43{,}200 \\text{ pounds of ore}}' was split into '200' because the LaTeX thousands separator '{,}' was not normalized inside \\boxed{}; the stale archived grader_detail still records the v1 failure while the archived passed flag was later flipped by the v2 regrade script - a known artifact of the archive's mixed grading generations. The repaired extractor must read 43200.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+        "task_id": "gsm8k-1026",
+        "arm": "classic",
+        "trial": 0
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "expected=43200, got=200",
+      "expected": "#### 43200"
+    },
+    {
+      "id": "gsm8k-plain-comma-thousands-pass",
+      "grader": "gsm8k",
+      "arm": "classic",
+      "source": "synthetic guard for the same normalization class as gsm8k-1026",
+      "model_answer": "She earns **$1,430** per week.",
+      "expected_verdict": true,
+      "rationale": "Normalized thousands in plain formatting: 1,430 must equal gold 1430, exercising separator-aware number tokens end to end.",
+      "expected": "#### 1430"
+    },
+    {
+      "id": "gsm8k-hash-decimal-truncation-guard-fail",
+      "grader": "gsm8k",
+      "arm": "tahoe",
+      "source": "synthetic guard against re-introducing the '####' decimal truncation (pre-repair behavior read '#### 42.50' as '42')",
+      "model_answer": "#### 42.50",
+      "expected_verdict": false,
+      "rationale": "The '####' branch must capture decimals: 42.50 is NOT 42, so this must fail. The old regex (\\d and commas only) truncated the decimal and would have wrongly passed it.",
+      "expected": "#### 42"
+    },
+    {
+      "id": "arc-0313-numeric-label-c-pass",
+      "grader": "arc",
+      "arm": "tahoe",
+      "source": "ARC-Challenge item 0313 (ai2_arc answerKey '3', numeric choice labels 1-4 displayed positionally; the prompt requests letters A-D); archived answer from benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+      "model_answer": "C",
+      "expected_verdict": true,
+      "rationale": "Archived wrong-fail repeated across both arms: expected=3, got=C. The answerKey '3' is the third displayed choice, so a 'C' answer is correct; the repaired grader maps numeric labels to the requested letter scheme (and would also via its 1-4 digit fallback without labels).",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+        "task_id": "arc-0313",
+        "arm": "tahoe",
+        "trial": 0
+      },
+      "archived_passed": false,
+      "archived_grader_detail": "expected=3, got=C",
+      "expected": "3",
+      "labels": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    {
+      "id": "arc-empty-answer-fail",
+      "grader": "arc",
+      "arm": "classic",
+      "source": "synthetic guard for the truncated/empty-answer class (cf. archived empty routing-02 rows)",
+      "model_answer": "",
+      "expected_verdict": false,
+      "rationale": "An empty or truncated multiple-choice answer has no letter; the grader must fail it rather than guess from nothing.",
+      "expected": "3",
+      "labels": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    {
+      "id": "mmlu-math-0005-final-answer-marker-pass",
+      "grader": "mmlu",
+      "arm": "tahoe",
+      "source": "MMLU college_mathematics item 0005 (gold index 3 == D); archived answer from benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+      "model_answer": "**Checking each statement:**\n\n- **(A)** Even + even = even, and even mod 10 stays even → closed under addition. **True**\n- **(B)** Even × even = even, and even mod 10 stays even → closed under multiplication. **True**\n- **(C)** 0 ∈ S and 0 + s = s for all s → additive identity exists. **True**\n- **(D)** Test e = 6: \n  - 6·0 = 0 ✓\n  - 6·2 = 12 ≡ 2 ✓\n  - 6·4 = 24 ≡ 4 ✓\n  - 6·6 = 36 ≡ 6 ✓\n  - 6·8 = 48 ≡ 8 ✓\n  \n  So **6 is a multiplicative identity** in S. Statement (D) claims none exists. **FALSE**\n\n**Answer: D**",
+      "expected_verdict": true,
+      "rationale": "The named repair case: the reasoning discusses option (A) first and ends '**Answer: D**'. Archived wrong-fail 'expected=D, got=A' because the old extractor took the first standalone letter. The explicit final-answer marker must win over earlier discussed options.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+        "task_id": "mmlu-math-0005",
+        "arm": "tahoe",
+        "trial": 0
+      },
+      "archived_passed": false,
+      "archived_grader_detail": "expected=D, got=A",
+      "expected": "3"
+    },
+    {
+      "id": "lsat-0063-marker-after-discussion-pass",
+      "grader": "lsat",
+      "arm": "classic",
+      "source": "AGIEval LSAT-LR item 0063 (gold B); archived answer from benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+      "model_answer": "# Analyzing the Argument\n\n**The argument's structure:**\n- A new behavior pattern (entering hot springs) emerged in the troop over a few decades\n- **Conclusion:** Macaques can adopt and pass on new behaviors, and are **not complete captives of their genetic heritage**\n\n**The logical gap:**\nThe argument observes a behavioral change and concludes it wasn't genetically determined. But what if the new behavior was actually genetically predetermined? If so, the macaques would still be \"captives of their genetic heritage,\" and the conclusion would fail.\n\n**Testing (B) with negation:**\nNegated: \"New patterns of behavior emerging over a few years or decades **ARE necessarily genetically predetermined**.\"\n\nIf true, this destroys the argument — the behavior change would be genetic, not social learning, and macaques would remain captives of their genes.\n\n**Why not the others:**\n- **(A)** If mutations CAN occur quickly, this actually weakens the argument (suggesting a genetic cause for the change)\n- **(C)** Irrelevant — the argument doesn't claim a genetic alteration occurred\n- **(D)** Too strong — the argument says \"not complete captives,\" not \"completely independent\" of genes\n- **(E)** The evidence already shows 27 years of persistence; this isn't the required assumption\n\n**The answer is B.**",
+      "expected_verdict": true,
+      "rationale": "Archived wrong-fail 'expected=B, got=A': the answer walks through all options (discussing (A)) and ends '**The answer is B.**'. The last explicit marker must be preferred over the earlier discussed option.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+        "task_id": "lsat-0063",
+        "arm": "classic",
+        "trial": 2
+      },
+      "archived_passed": false,
+      "archived_grader_detail": "expected=B, got=A",
+      "expected": "B"
+    },
+    {
+      "id": "lsat-0198-discussion-is-not-a-marker-pass",
+      "grader": "lsat",
+      "arm": "classic",
+      "source": "AGIEval LSAT-LR item 0198 (gold D); archived answer from benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+      "model_answer": "**D**\n\nFrom the premises: staying within budget requires the sorting requirement (premise 3), and the sorting requirement leads to more recyclables in the landfill (premises 1 and 2). So if the department stays within budget, the sorting requirement must be implemented, which means more recyclables will end up in the landfill. Answer (E) makes the common mistake of reversing a necessary condition into a sufficient one.",
+      "expected_verdict": true,
+      "rationale": "Marker-strictness guard in the opposite direction: the final answer D is stated up front, and the closing sentence 'Answer (E) makes the common mistake...' is option DISCUSSION, not a declaration. Because the marker regex requires a separator ('is' or ':'/'-'), this must still pass as D instead of being flipped to E.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+        "task_id": "lsat-0198",
+        "arm": "classic",
+        "trial": 0
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "expected=D, got=D",
+      "expected": "D"
+    },
+    {
+      "id": "bbh-0139-marker-agrees-with-paren-pass",
+      "grader": "bbh",
+      "arm": "classic",
+      "source": "BBH logical_deduction_seven_objects item 0139 (target '(E)'); archived answer from benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+      "model_answer": "**E**\n\nHere's the reasoning:\n- Eli finished **1st**\n- Mel finished **2nd**\n- Ana finished **3rd**\n- Joe finished second-to-last → **6th**\n- Mya finished below Joe → **7th** (last)\n- Rob finished third-to-last → **5th**\n- Eve takes the remaining spot → **4th**\n\nMya finished last, so the answer is **(E)**.",
+      "expected_verdict": true,
+      "rationale": "The answer ends 'Mya finished last, so the answer is **(E)**.' With the marker-priority repair the explicit marker (E) is extracted; the legacy '(X)'-paren rule would have agreed. Guards that marker priority does not regress BBH verdicts.",
+      "archive_ref": {
+        "file": "benchmarks/results/2026-09-13-stage1-full/full_test_eval.json",
+        "task_id": "bbh-0139",
+        "arm": "classic",
+        "trial": 2
+      },
+      "archived_passed": true,
+      "archived_grader_detail": "expected=E, got=E",
+      "expected": "(E)"
+    }
+  ]
+}

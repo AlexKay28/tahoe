@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from graders import ContainsGrader, ExactMatchGrader, NumericGrader, JSONFieldGrader
+from runner_classic import grading_outcome, outcome_fields
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,18 @@ class MultiTurnResult:
     turns_to_completion: int = 0
     failure_class: str = "none"
     final_answer: str = ""
+    # Truthful classic-runner outcome capture (see runner_classic): the
+    # API finish reason of the last completion, the token-limit cap flag,
+    # the empty-response status, the retry history/count and the complete
+    # first-request generation parameters.
+    finish_reason: str = ""
+    truncated: bool = False
+    cap_exhausted: bool = False
+    output_token_cap: int = 0
+    empty_response: bool = False
+    retries: int = 0
+    retry_history: list[dict] = field(default_factory=list)
+    request_params: dict = field(default_factory=dict)
     per_turn_quality: list[bool] = field(default_factory=list)
     error_recovery: bool = False
 
@@ -609,6 +622,16 @@ def run_multiturn_trial(
     if task.grader is not None:
         passed, grader_detail = task.grader(result.final_answer, task.expected_state)
 
+    # Truthful outcome capture (shared policy from runner_classic): the
+    # runner's failure class is preserved verbatim and can never grade
+    # into a pass; a token-limit-capped answer that fails grading is
+    # "truncated", not an ordinary wrong_answer.
+    passed, failure_class = grading_outcome(
+        getattr(result, "failure_class", "none"),
+        passed,
+        getattr(result, "finish_reason", ""),
+    )
+
     turns_to_completion = result.turns if passed else 0
 
     return MultiTurnResult(
@@ -624,8 +647,12 @@ def run_multiturn_trial(
         wall_seconds=result.wall_seconds,
         turns=result.turns,
         turns_to_completion=turns_to_completion,
-        failure_class=result.failure_class,
+        failure_class=failure_class,
         final_answer=result.final_answer,
+        # Preserve the runner's truthful trial outcome: finish reason,
+        # truncation, empty-response status, retry history/count and the
+        # complete first-request generation parameters.
+        **outcome_fields(result),
         per_turn_quality=[],  # filled by multi-turn grader if available
         error_recovery=False,  # detected when failure_class was error then recovered
     )
@@ -738,8 +765,25 @@ def print_report(results: list[MultiTurnResult]) -> None:
             f"{stats['error_recovery_rate']*100:7.1f}%"
         )
 
-    results_dir = Path(__file__).parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    # Save into a fresh, exclusive run directory (never a fixed path at
+    # the results root) with a configuration/source manifest. The printed
+    # table above is unchanged.
+    from outdir import make_run_dir, write_manifest
+    results_dir = make_run_dir("multiturn-bench")
+    write_manifest(
+        results_dir,
+        config={
+            "runner": "run_multiturn_bench.py",
+            "model": os.environ.get("TAHOE_MODEL", ""),
+            "arms": list(ARMS),
+            "trials_per_task": TRIALS_PER_TASK,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "runner_classic.py",
+            Path(__file__).parent / "graders.py",
+        ],
+    )
     out_path = results_dir / "multiturn_bench.json"
     serializable = [
         {
@@ -757,6 +801,18 @@ def print_report(results: list[MultiTurnResult]) -> None:
             "turns_to_completion": r.turns_to_completion,
             "failure_class": r.failure_class,
             "final_answer": r.final_answer,
+            # Truthful runner outcome capture, preserved in the JSON dump:
+            # finish reason, truncation, empty-response status, retry
+            # history/count and the complete first-request generation
+            # parameters.
+            "finish_reason": r.finish_reason,
+            "truncated": r.truncated,
+            "cap_exhausted": r.cap_exhausted,
+            "output_token_cap": r.output_token_cap,
+            "empty_response": r.empty_response,
+            "retries": r.retries,
+            "retry_history": r.retry_history,
+            "request_params": r.request_params,
             "per_turn_quality": r.per_turn_quality,
             "error_recovery": r.error_recovery,
         }

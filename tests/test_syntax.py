@@ -2974,25 +2974,29 @@ SUBTYPE_PROTOCOL = """\
 PROGRAM subtest VERSION 1.0
 
 INPUT
-  F.request = "x"
+  E.request = "x"
 
-step.work: DO define(value = F.request) -> E.result
+step.work: DO define(value = E.request) -> E.result
 
 RETURN E.result
 """
 
 
 def test_call_subtype_no_warning(tmp_path):
-    """E.* passed where F.* expected: E ⊑ F, so no warning."""
+    """F.* passed where E.* expected: F ⊑ E (a fact is usable as
+    evidence), so no warning.  The draft-0.1 edge E ⊑ F is removed:
+    evidence must be promoted to a fact by command work, never by
+    subtyping (see test_call_evidence_not_fact_warning below)."""
     write_protocol(tmp_path, "subtest", SUBTYPE_PROTOCOL)
     source = """\
 PROGRAM caller VERSION 1.0
 
 INPUT
   G.goal = "frame the issue"
+  F.fact = "established"
 
-step.ask: DO define(value = G.goal) -> E.probe
-CALL protocol.subtest(request = E.probe) -> E.result
+step.ask: DO define(value = G.goal) -> G.probe
+CALL protocol.subtest(request = F.fact) -> E.result
 
 RETURN E.result
 """
@@ -3005,6 +3009,50 @@ RETURN E.result
     warnings = get_type_warnings()
     call_warnings = [w for w in warnings if w.startswith("CALL ")]
     assert len(call_warnings) == 0
+
+
+EVIDENCE_NOT_FACT_PROTOCOL = """\
+PROGRAM notfact VERSION 1.0
+
+INPUT
+  F.request = "x"
+
+step.work: DO define(value = F.request) -> E.result
+
+RETURN E.result
+"""
+
+
+def test_call_evidence_not_fact_warning(tmp_path):
+    """E.* passed where F.* expected: E ⋢ F — evidence must never
+    implicitly become a fact (promotion is command work, e.g. estimate
+    commits estimate:F), so the handoff warns.  The draft-0.1 lattice
+    asserted E ⊑ F here; that edge is removed."""
+    write_protocol(tmp_path, "notfact", EVIDENCE_NOT_FACT_PROTOCOL)
+    source = """\
+PROGRAM caller VERSION 1.0
+
+INPUT
+  G.goal = "frame the issue"
+  E.evidence = "observed"
+
+step.ask: DO define(value = G.goal) -> G.probe
+CALL protocol.notfact(request = E.evidence) -> E.result
+
+RETURN E.result
+"""
+    program = parse_program(source)
+    assert validate_program(
+        program,
+        known_commands={"define"},
+        protocols_dir=tmp_path / "protocols",
+    ) is True
+    warnings = get_type_warnings()
+    call_warnings = [w for w in warnings if w.startswith("CALL ")]
+    assert len(call_warnings) == 1
+    assert "request" in call_warnings[0]
+    assert "E.*" in call_warnings[0]
+    assert "F.*" in call_warnings[0]
 
 
 INCOMPATIBLE_PROTOCOL = """\
@@ -3099,16 +3147,20 @@ RETURN E.result
 
 
 def test_cross_call_chain_handoff_compatible_no_warning(tmp_path):
-    """CALL-1 commits E.result, CALL-2 passes E.result where F.* expected: E ⊑ F."""
+    """CALL-1 commits V.result (via verify), CALL-2 passes V.result
+    where F.* expected: V ⊑ F (a verified result is a fact), so the
+    handoff is safe and silent.  The draft-0.1 version asserted
+    E ⊑ F here (evidence silently becoming fact); that edge is
+    removed by the repaired lattice."""
     chain_compat_a = """\
 PROGRAM chain_ca VERSION 1.0
 
 INPUT
   G.request = "x"
 
-step.work: DO define(value = G.request) -> E.result
+step.work: DO verify(goal = G.request, evidence = "ev") -> V.result
 
-RETURN E.result
+RETURN V.result
 """
     chain_compat_b = """\
 PROGRAM chain_cb VERSION 1.0
@@ -3116,9 +3168,9 @@ PROGRAM chain_cb VERSION 1.0
 INPUT
   F.data = "d"
 
-step.work: DO define(value = F.data) -> V.result
+step.work: DO define(value = F.data) -> G.out
 
-RETURN V.result
+RETURN G.out
 """
     write_protocol(tmp_path, "chain_ca", chain_compat_a)
     write_protocol(tmp_path, "chain_cb", chain_compat_b)
@@ -3128,15 +3180,15 @@ PROGRAM caller VERSION 1.0
 INPUT
   G.goal = "frame the issue"
 
-CALL protocol.chain_ca(request = G.goal) -> E.result
-CALL protocol.chain_cb(data = E.result) -> V.result
+CALL protocol.chain_ca(request = G.goal) -> V.result
+CALL protocol.chain_cb(data = V.result) -> G.out
 
-RETURN V.result
+RETURN G.out
 """
     program = parse_program(source)
     assert validate_program(
         program,
-        known_commands={"define"},
+        known_commands={"define", "verify"},
         protocols_dir=tmp_path / "protocols",
     ) is True
     warnings = get_type_warnings()

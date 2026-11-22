@@ -30,14 +30,25 @@ references (\texttt{G}~goal, \texttt{E}~evidence, \texttt{H}~hypothesis,
 (\textsc{Compute}, \textsc{Select}, \textsc{Deduce}), and economy rules that
 together form a logic-level pseudocode for how a model should think. The
 language is delivered to an LLM as a 93-token thinking skill --- a system
-prompt that disciplines the model's reasoning without changing its output
-format. We evaluate TAHOE against classic inference on the \emph{full test
-sets} of ten public benchmarks (GSM8K, ARC, BBH, MMLU, LSAT, RACE) across two
-models, 63{,}348 trials in total. TAHOE reduces reasoning-token consumption by
-49\% on GLM-5.3-Flash (0.51$\times$) and 32\% on gpt-oss-120b (0.68$\times$),
-while improving pass rate by 2.9pp on the former (88.9\% $\to$ 91.8\%;
-harmonic mean of quality and efficiency 1.250 vs.\ 0.941) and matching it on
-the latter. The language ships with formal operational semantics, a typed
+prompt that disciplines the model's reasoning; its final rule explicitly
+constrains output (``Output only the answer''), so the comparisons measure
+the structure scaffold and the answer-only output contract as one bundle.
+We evaluate TAHOE against classic inference on ten public-benchmark
+slices (GSM8K, ARC, BBH, MMLU subjects, LSAT, RACE) across two models,
+63{,}348 trials in total. TAHOE reduces output tokens to 0.511$\times$ on
+GLM-5.3-Flash and 0.682$\times$ on gpt-oss-120b (total-token ratios
+0.931$\times$ and 1.011$\times$: the prompt overhead offsets much of the
+output saving). Accuracies are the \emph{current-grader derived results} of
+a full offline regrade of both raw archives (expectations reconstructed from
+archived grader details, not independently validated gold): overall micro
+accuracy is $+0.49$pp on the former (95.96\% $\to$ 96.45\%) and $-0.19$pp on
+the latter --- the overall deltas are themselves \emph{not} tested for
+significance or equivalence (the inferential family is per benchmark,
+Holm-corrected); the significant per-benchmark results are GSM8K favoring
+TAHOE on both models and RACE favoring classic on gpt-oss-120b.
+The measured manipulation is the 93-token prompt as a whole; the typed
+refs, protocols, and runtime are design artifacts not isolated by these
+comparisons. The language ships with formal operational semantics, a typed
 type-checker, and a frozen evaluation protocol; we additionally document the
 grader-format sensitivity that confounds cross-format comparisons.
 \end{abstract}
@@ -45,23 +56,27 @@ grader-format sensitivity that confounds cross-format comparisons.
 \section{Introduction}
 
 LLM reasoning quality varies with problem structure.
-Free-form chain-of-thought (CoT) prompting~\cite{wei2022cot} improves accuracy but produces verbose, unstructured output that wastes tokens. We evaluate on ten public benchmarks --- GSM8K~\cite{cobbe2021gsm8k}, ARC~\cite{clark2018arc}, BBH~\cite{suzgun2022bbh}, MMLU~\cite{hendrycks2021mmlu}, LSAT-AR, and RACE~\cite{lai2017race} --- and position the result against the agent-harness and token-efficiency literature (Section~\ref{sec:related}).
+Free-form chain-of-thought (CoT) prompting~\cite{wei2022cot} improves accuracy but produces verbose, unstructured output that wastes tokens. We evaluate on ten public-benchmark slices --- GSM8K~\cite{cobbe2021gsm8k}, ARC~\cite{clark2018arc}, BBH~\cite{suzgun2022bbh}, MMLU~\cite{hendrycks2021mmlu}, AGIEval LSAT-LR, and RACE~\cite{lai2017race} (exact slices in Section~\ref{sec:results}) --- and position the result against the agent-harness and token-efficiency literature (Section~\ref{sec:related}).
 As models are deployed at scale, the cost of reasoning tokens becomes a first-order concern: each redundant token increases latency, compute, and inference cost without improving answer quality.
 
-TAHOE addresses this by providing a language for structured reasoning that the model applies internally as a \emph{thinking skill}---a system prompt that shapes how the model reasons without changing the task or the output format.
+TAHOE addresses this by providing a language for structured reasoning that the model applies internally as a \emph{thinking skill}---a system prompt that shapes how the model reasons, while its final rule explicitly imposes an answer-only output contract.
 The key design decision is that TAHOE operates on the model's \emph{thinking},
 not on its output: the model reasons with typed commitments and protocols
 internally, and its visible answer shrinks to the answer itself. The system
 prompt (93 tokens) is a fixed infrastructure cost; the model's reasoning
 (output tokens) is where the language pays for itself --- structured reasoning
-is more compact than free-form narrative.
+is more compact than free-form narrative ($\sim$49\% fewer output tokens on
+GLM, $\sim$32\% on gpt-oss; total spend $-7\%$ and $+1\%$ respectively). The
+measured effect is the prompt bundle; quality deltas under the current-grader
+derived regrade are small ($+0.49$pp and $-0.19$pp overall, not themselves
+tested).
 
 \paragraph{Contributions.}
 \begin{itemize}[nosep,leftmargin=*]
     \item \textbf{The TAHOE language}: a notation of typed epistemic references, named protocols, and economy rules --- a logic-level pseudocode for reasoning --- with a reference grammar, type-checker, and executor (Section~\ref{sec:language}).
     \item \textbf{Formal semantics}: small-step operational semantics with progress and preservation theorems (Section~\ref{subsec:formal}).
-    \item \textbf{Mechanism analysis}: why the language helps --- search bounding, typed commitment, and internalization (Section~\ref{subsec:mechanism}).
-    \item \textbf{Benchmark proof}: 63{,}348-trial evaluation across two models on full test sets, with 49\%/32\% reasoning-token reduction at quality parity or better, under a frozen arm-agnostic evaluation protocol (Section~\ref{sec:results}).
+    \item \textbf{Mechanism hypotheses}: why the language may help --- search bounding, typed commitment, and internalization; these mechanisms are design hypotheses, not isolated measurements (Section~\ref{subsec:mechanism}).
+    \item \textbf{Benchmark evidence}: 63{,}348-trial evaluation across two models on exact benchmark slices, with output-token ratios 0.511$\times$ (GLM) and 0.682$\times$ (gpt-oss-120b) at total-token ratios 0.931$\times$ and 1.011$\times$, under a frozen arm-agnostic evaluation protocol; accuracy figures are current-grader \emph{derived} results from an immutable offline regrade of the raw archives, with a per-benchmark Holm-corrected inferential family (Section~\ref{sec:results}).
 \end{itemize}
 
 \section{TAHOE Language}
@@ -182,12 +197,20 @@ All event-driven rules (\textsc{First}, \textsc{Await}, \textsc{Approve}) make n
 
 \subsection{Experimental Design}
 
-We use a two-arm controlled experiment with a single model (GLM-5.3-Flash):
+We use a two-arm comparison with a single model per study (GLM-5.3-Flash and gpt-oss-120b):
 
 \begin{itemize}[nosep,leftmargin=*]
     \item \textbf{Classic arm}: task prompt $\to$ answer (empty system prompt).
     \item \textbf{TAHOE arm}: task prompt + 93-token thinking skill $\to$ answer.
 \end{itemize}
+
+The manipulation is the presence of the 93-token prompt as a whole. No
+typed-ref output contract is imposed, and the archived tahoe-arm trials
+record zero emitted typed refs: the typed refs, protocols, and runtime of
+Section~\ref{sec:language} are the language's design, not something these
+comparisons isolate. A preregistered factorial experiment separating the
+structure scaffold from the answer-only output contract is prepared but has
+not been run (\texttt{docs/PREREGISTRATION-structure-answer.md}).
 
 \subsection{Frozen Invariant}
 \label{subsec:frozen}
@@ -204,7 +227,7 @@ Specifically:
 
 Grading logic never branches on arm identity.
 If a grader needs fixing, it is fixed for both arms simultaneously.
-This invariant is enforced by the evaluation harness (\texttt{benchmarks/eval\_runner.py}) and verified by code inspection.
+This invariant is enforced by the evaluation harness (\texttt{benchmarks/run\_skill\_compare.py}; public-benchmark graders in \texttt{benchmarks/run\_public\_bench.py}) and verified by code inspection.
 
 \subsection{Token Accounting}
 \label{subsec:token-accounting}
@@ -218,7 +241,10 @@ We separate input and output tokens:
 
 The system prompt is infrastructure: a fixed per-call cost.
 The reasoning tokens are the model's actual work.
-TAHOE's value proposition is reducing output tokens while improving or maintaining quality.
+TAHOE's value proposition is reducing output tokens; total spend drops less
+(the prompt and its input overhead offset much of the saving), and quality
+deltas under the current-grader derived regrade are small ($+0.49$pp and
+$-0.19$pp overall, not themselves tested --- see Section~\ref{sec:results}).
 All token counts are reported as the mean across 3 trials per sample.
 
 \subsection{Graders}
@@ -237,101 +263,226 @@ Each benchmark uses a task-specific grader, identical for both arms:
 \label{subsec:bootstrap}
 
 We report 95\% bootstrap confidence intervals for all aggregate metrics.
-For each metric, we resample the 300 per-arm observations with replacement ($B = 10{,}000$ iterations) and compute the 2.5th and 97.5th percentiles of the bootstrap distribution.
+For the inferential task-level analysis, trials are paired by exact
+\texttt{(benchmark, task\_id, trial)} identity, repeated trials are averaged
+within each \texttt{(benchmark, task\_id)} task (tasks, not repeated trials,
+are the unit of analysis), and the reported delta is the \emph{paired
+task-macro} difference with a 95\% paired task-cluster bootstrap (percentile)
+CI ($B = 10{,}000$ iterations). This paired task-cluster analysis
+(\texttt{benchmarks/difficulty\_curve.py} \texttt{compute\_curve}, run
+offline on the archived trials) replaces the earlier unpaired pooled
+two-proportion $z$ test; per-arm ``$\pm$'' interval summaries, where shown,
+are descriptive only.
 
 \subsection{Permutation Test}
 \label{subsec:permutation}
 
-To test whether the quality difference between arms is statistically significant, we use a permutation test.
-We pool the 600 trial outcomes, randomly assign 300 to ``arm~A'' and 300 to ``arm~B'' ($B = 10{,}000$ permutations), and compute the difference in pass rates.
-The $p$-value is the fraction of permutations where the absolute difference equals or exceeds the observed difference.
+To test whether the quality difference between arms is statistically significant, we use a two-sided paired permutation test on the task-macro values.
+Within each benchmark, we randomly swap the arm labels of the paired task values ($B = 10{,}000$ permutations) and compute the difference in task-macro pass rates.
+The raw $p$-value is the fraction of permutations where the absolute difference equals or exceeds the observed difference; raw $p$-values are then \emph{Holm-adjusted across the 14-benchmark family}, and we call a delta significant only when the family-wise adjusted $p$-value is below $0.05$.
 
 \section{Results}
 \label{sec:results}
 
 \subsection{Setup}
 
-10 benchmarks, 10 samples per benchmark, 3 trials per sample, 600 trials total.
-Run with 6 parallel workers, completed in 279 seconds.
+Ten benchmark slices, 3 trials per sample, two models (63{,}348 archived
+trials; exact slices and derived-results caveats below). All trials ran under a
+fixed 2048-output-token cap per response.
+
+\subsection{Setup}
+
+Ten benchmark slices, 3 trials per sample, two models (63{,}348 archived
+trials; exact slices and derived-results caveats below). All trials ran under a
+fixed 2048-output-token cap per response.
 
 \subsection{Main Results}
 
-Table~\ref{tab:results} shows per-benchmark results.
-Overall, TAHOE achieves 89\% pass rate (267/300) vs.\ 88\% for classic (263/300), while using 60{,}055 output tokens vs.\ 100{,}595---a 40\% reduction (ratio 0.60$\times$).
+All accuracy figures below are the \emph{current-grader derived results}
+from the completed full Stage-1 offline regrade: the raw 2026-09-13 archives
+were re-graded with the current graders (regrade CLI
+\texttt{benchmarks/fix\_stage1\_extraction.py}, helper pipeline
+\texttt{benchmarks/stage1\_regrade.py}; GSM8K rows by the current
+numeric-v6 extractor) and per-model canonical statistics
+computed with \texttt{benchmarks/canonical\_results.py}. The tables are
+\emph{generated blocks}, rendered from the canonical payloads by
+\texttt{benchmarks/render\_canonical\_docs.py}; artifacts:
+\texttt{benchmarks/results/derived/2026-11-18-stage1-full-v3/}. Expectations
+are reconstructed from archived grader details --- these are current-grader
+derived results, not independently validated gold data. The archived
+\emph{stored grades} are superseded (stored overall GLM 88.9\% $\to$ 91.8\%,
+gpt-oss 89.1\% $\to$ 88.9\%; stored GSM8K GLM 68.5\% $\to$ 80.3\%).
 
-\begin{table}[t]
-\centering
-\caption{Per-benchmark results: 3 trials per sample, 10 samples per benchmark.}
-\label{tab:results}
-\small
-\begin{tabular}{lrrrrrr}
+\begingroup\scriptsize\setlength{\tabcolsep}{3pt}
+% CANONICAL_RESULTS:BEGIN summary@glm
+\subsection*{Overall}
+
+\begin{tabular}{@{}l r r r r r r r r r r r r r r r@{}}
 \toprule
-Benchmark & $N$ & Cl.\ pass & Tah.\ pass & Cl.\ out & Tah.\ out & Ratio \\
+arm & trials & tasks & successes & micro acc (trial-pooled) & macro acc (task-eq-wt) & input tok & output tok & total tok & total spend/success & truncated & cap-exhausted & empty & completed & completed acc & grader err \\
 \midrule
-GSM8K & 1319 & 68.5\% & \textbf{80.3\%} & 241 & 91 & 0.38$\times$ \\
-ARC & 1172 & \textbf{96.0\%} & 95.7\% & 121 & 58 & 0.48$\times$ \\
-BBH & 250 & \textbf{99.5\%} & 98.8\% & 472 & 288 & 0.61$\times$ \\
-BBH-track & 250 & \textbf{99.9\%} & 99.5\% & 521 & 270 & 0.52$\times$ \\
-BBH-arith & 200 & \textbf{100\%} & 99.8\% & 117 & 97 & 0.83$\times$ \\
-MMLU-math & 100 & 94.3\% & 94.3\% & 399 & 318 & 0.80$\times$ \\
-MMLU-logic & 126 & \textbf{95.2\%} & 93.1\% & 312 & 263 & 0.84$\times$ \\
-MMLU-acct & 282 & 96.1\% & \textbf{96.3\%} & 238 & 138 & 0.58$\times$ \\
-LSAT & 510 & 93.4\% & \textbf{94.9\%} & 432 & 210 & 0.49$\times$ \\
-RACE & 1045 & \textbf{94.1\%} & 93.8\% & 189 & 100 & 0.53$\times$ \\
-\midrule
-\textbf{Overall} & --- & 88.9\% & \textbf{91.8\%} & 247 & 126 & \textbf{0.51$\times$} \\
+classic & 15762 & 5254 & 15125 & 0.9596 & 0.9596 & 3159995 & 3886451 & 7046446 & 465.88 & 0 & 88 & 128 & 15630 & 0.9676 & 6 \\
+tahoe & 15762 & 5254 & 15203 & 0.9645 & 0.9645 & 4575877 & 1984221 & 6560098 & 431.50 & 0 & 49 & 54 & 15706 & 0.9679 & 6 \\
 \bottomrule
 \end{tabular}
-\end{table}
+
+\begin{tabular}{@{}l r r r r r r r@{}}
+\toprule
+scope & input tok ratio (tahoe/classic) & output tok ratio (tahoe/classic) & total tok ratio (tahoe/classic) & total spend/success classic & total spend/success tahoe & micro acc diff (tahoe-classic) & macro acc diff (tahoe-classic) \\
+\midrule
+overall (all benchmarks pooled) & 1.4481 & 0.5105 & 0.9310 & 465.88 & 431.50 & +0.0049 & +0.0049 \\
+\bottomrule
+\end{tabular}
+% CANONICAL_RESULTS:END summary@glm
+
+% CANONICAL_RESULTS:BEGIN pair@glm
+\subsection*{classic vs tahoe}
+
+\begin{tabular}{@{}l r r r r r r r@{}}
+\toprule
+scope & input tok ratio (tahoe/classic) & output tok ratio (tahoe/classic) & total tok ratio (tahoe/classic) & total spend/success classic & total spend/success tahoe & micro acc diff (tahoe-classic) & macro acc diff (tahoe-classic) \\
+\midrule
+overall (all benchmarks pooled) & 1.4481 & 0.5105 & 0.9310 & 465.88 & 431.50 & +0.0049 & +0.0049 \\
+arc & 1.9682 & 0.4784 & 1.1229 & 217.39 & 244.67 & -0.0023 & -0.0023 \\
+bbh & 1.4389 & 0.6110 & 0.8605 & 678.69 & 587.97 & -0.0067 & -0.0067 \\
+bbh\_arith & 3.0227 & 0.8284 & 1.4272 & 161.24 & 230.50 & -0.0017 & -0.0017 \\
+bbh\_track & 1.3924 & 0.5179 & 0.7830 & 749.21 & 588.99 & -0.0040 & -0.0040 \\
+gsm8k & 2.2546 & 0.3760 & 0.8027 & 329.42 & 258.56 & +0.0215 & +0.0215 \\
+lsat & 1.2507 & 0.4858 & 0.8437 & 868.03 & 721.24 & +0.0144 & +0.0144 \\
+mmlu\_acct & 1.7407 & 0.5824 & 0.9732 & 373.19 & 362.30 & +0.0024 & +0.0024 \\
+mmlu\_logic & 1.6894 & 0.8446 & 1.0919 & 461.76 & 517.10 & -0.0238 & -0.0238 \\
+mmlu\_math & 1.8515 & 0.7972 & 1.0161 & 533.79 & 538.55 & +0.0067 & +0.0067 \\
+race & 1.1951 & 0.5268 & 1.0006 & 690.05 & 692.11 & -0.0022 & -0.0022 \\
+\bottomrule
+\end{tabular}
+% CANONICAL_RESULTS:END pair@glm
+
+% CANONICAL_RESULTS:BEGIN paired@glm
+\subsection*{Paired task-cluster comparisons (Holm-corrected)}
+
+\begin{tabular}{@{}l r r r r r r r r r r r@{}}
+\toprule
+comparison & tasks & pairs & task-mean pass (a) & task-mean pass (b) & pass diff (a-b) & mean token diff (a-b) & perm p & perm p (Holm) & pass perm p (Holm) & z p (Holm) & wilcoxon p (Holm) \\
+\midrule
+arc/classic\_vs\_tahoe & 1172 & 3516 & 0.9784 & 0.9761 & +0.0023 & -26.1 & 0.0001 & 0.0010 & 1.0000 & 1.0000 & 0.0000 \\
+bbh/classic\_vs\_tahoe & 250 & 750 & 0.9947 & 0.9880 & +0.0067 & +94.1 & 0.0001 & 0.0010 & 1.0000 & 0.6608 & 0.0000 \\
+bbh\_arith/classic\_vs\_tahoe & 200 & 600 & 1.0000 & 0.9983 & +0.0017 & -68.9 & 0.0001 & 0.0010 & 1.0000 & 1.0000 & 0.0000 \\
+bbh\_track/classic\_vs\_tahoe & 250 & 750 & 0.9987 & 0.9947 & +0.0040 & +162.4 & 0.0001 & 0.0010 & 1.0000 & 1.0000 & 0.0000 \\
+gsm8k/classic\_vs\_tahoe & 1319 & 3957 & 0.9484 & 0.9699 & -0.0215 & +61.6 & 0.0001 & 0.0010 & 0.0010 & 0.0000 & 0.0000 \\
+lsat/classic\_vs\_tahoe & 510 & 1530 & 0.9346 & 0.9490 & -0.0144 & +126.8 & 0.0001 & 0.0010 & 0.2079 & 0.1664 & 0.0000 \\
+mmlu\_acct/classic\_vs\_tahoe & 282 & 846 & 0.9610 & 0.9634 & -0.0024 & +9.6 & 0.2088 & 0.6263 & 1.0000 & 1.0000 & 0.1620 \\
+mmlu\_logic/classic\_vs\_tahoe & 126 & 378 & 0.9550 & 0.9312 & +0.0238 & -40.5 & 0.0009 & 0.0036 & 0.4480 & 0.2913 & 0.0001 \\
+mmlu\_math/classic\_vs\_tahoe & 100 & 300 & 0.9433 & 0.9500 & -0.0067 & -8.1 & 0.7096 & 1.0000 & 1.0000 & 1.0000 & 0.1620 \\
+race/classic\_vs\_tahoe & 1045 & 3135 & 0.9410 & 0.9388 & +0.0022 & -0.4 & 0.9372 & 1.0000 & 1.0000 & 1.0000 & 0.0000 \\
+\bottomrule
+\end{tabular}
+
+Multiplicity: holm step-down correction over 10 comparisons (family: comparisons); pairing key: (benchmark, task\_id, trial).
+% CANONICAL_RESULTS:END paired@glm
+\endgroup
+
+Slices: GSM8K test (1{,}319, full); ARC-Challenge test (1{,}172, full); BBH
+\texttt{logical\_deduction\_seven\_objects} and
+\texttt{tracking\_shuffled\_objects\_seven\_objects} (250 each, full); BBH
+\texttt{multistep\_arithmetic\_two} (200 in the GLM run; all 250 in the
+gpt-oss run---rows not comparable across models); MMLU
+\texttt{college\_mathematics} (100), \texttt{formal\_logic} (126),
+\texttt{professional\_accounting} (282), each subject's full test split;
+AGIEval LSAT-LR (510, full); RACE high-school split, the \emph{first
+question of each of 1{,}045 sampled articles} (not the full RACE test set).
 
 \subsection{Token Efficiency}
 
-TAHOE produces 49\% fewer output tokens per trial (126 vs.\ 247 on GLM-5.3-Flash; 0.51$\times$ overall).
-The largest savings are on GSM8K (0.38$\times$), ARC (0.48$\times$), and LSAT (0.49$\times$); no benchmark exceeds 0.84$\times$. On gpt-oss-120b the ratio is 0.68$\times$ (quality-matched), consistent with the substitution hypothesis: the more verbose the model's native reasoning, the more the language saves.
+TAHOE produces 49\% fewer output tokens per trial (126 vs.\ 247 mean output
+tokens on GLM-5.3-Flash; ratio 0.511$\times$; total-token ratio
+0.931$\times$, 416 vs.\ 447 mean total tokens). The largest output savings
+are on GSM8K (0.38$\times$), ARC (0.48$\times$), and LSAT (0.49$\times$); no
+benchmark exceeds an 0.85$\times$ output ratio. On gpt-oss-120b the
+output-token ratio is 0.682$\times$ (184 vs.\ 269) but the \emph{total}-token
+ratio is 1.011$\times$ (530 vs.\ 524): the 93-token prompt times 15{,}912
+calls outweighs the output saving. The smaller output compression on
+gpt-oss-120b is consistent with the substitution hypothesis: the more
+verbose the model's native reasoning, the more the language saves.
 
 Figure~\ref{fig:quality_vs_tokens} visualizes the quality--efficiency trade-off: TAHOE occupies the upper-left quadrant (high quality, low tokens).
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.8\textwidth]{figures/quality_vs_tokens.pdf}
-\caption{Quality vs.\ mean output tokens per benchmark. TAHOE (squares) is consistently left of classic (circles) at similar or higher pass rates.}
+\caption{Quality vs.\ mean output tokens per benchmark. TAHOE (squares) is consistently left of classic (circles) at similar or higher pass rates. Figure generated from stored-grade trial data; accuracy tables in this section are current-grader derived.}
 \label{fig:quality_vs_tokens}
 \end{figure}
 
-\subsection{Harmonic Mean}
+\subsection{Harmonic Mean (retired)}
 
-We compute the harmonic mean of quality and efficiency:
-\[
-\text{HM} = 2 \cdot \frac{\text{quality} \times \text{efficiency}}{\text{quality} + \text{efficiency}}
-\]
-where quality = pass rate and efficiency = $1 - (\text{output tokens} / \text{max output tokens})$.
+Earlier drafts reported a harmonic mean of quality and efficiency
+(HM $= 1.250$ vs.\ $0.941$ on GLM, $1.107$ vs.\ $0.942$ on gpt-oss) as a
+single quality-efficiency score. Those values exceed 1 and cannot be
+reproduced from a bounded definition (quality = pass rate $\le 1$,
+efficiency $= 1 - \text{output/max} \le 1$ implies HM $\le 1$); the
+underlying formula evidently used an unbounded efficiency term. The metric
+is \emph{retired} until it is reproducibly defined from committed data, and
+no HM-based superiority claim is made in this paper. Readers can regenerate
+all reported quantities offline with
+\texttt{benchmarks/canonical\_results.py}.
 
-TAHOE achieves HM $= 1.250$ vs.\ HM $= 0.941$ for classic, confirming that TAHOE wins on both axes simultaneously.
-
-\subsection{Quality Gains by Benchmark}
+\subsection{Quality Gains by Benchmark (derived)}
 
 \begin{itemize}[nosep,leftmargin=*]
-    \item \textbf{GSM8K}: $+11.8$pp (68.5\% $\to$ 80.3\%) --- the largest quality gain, at 0.38$\times$ tokens.
-    \item \textbf{LSAT}: $+1.5$pp (93.4\% $\to$ 94.9\%) at 0.49$\times$ tokens.
-    \item \textbf{MMLU-acct}: $+0.2$pp (96.1\% $\to$ 96.3\%) at 0.58$\times$ tokens.
+    \item \textbf{GSM8K}: TAHOE higher on both models --- GLM 94.8\% $\to$ 97.0\% ($+2.1$pp, pass-rate permutation Holm $p=0.0010$), gpt-oss-120b 93.7\% $\to$ 95.0\% ($+1.4$pp, $p=0.0060$), at 0.38$\times$ / 0.40$\times$ output tokens. Derived current-grader results with expectations reconstructed from archived grader details --- not independent gold validation.
+    \item \textbf{RACE}: the one significant regression --- classic higher on gpt-oss-120b ($89.8\% \to 88.7\%$ of task-mean pass, $p=0.0162$).
+    \item \textbf{All other benchmarks}: no per-benchmark difference clears the Holm-corrected family; LSAT trends toward TAHOE on GLM ($+1.4$pp, $p=0.208$) and toward classic on gpt-oss ($-2.3$pp, $p=0.203$).
 \end{itemize}
 
-The gains concentrate on tasks requiring multi-step derivation, where the protocol structure prevents reasoning errors.
-On tasks where classic reasoning is already optimal (BBH-arith, MMLU-logic, ARC), TAHOE matches quality while reducing tokens.
+The derived gains concentrate on tasks requiring multi-step derivation;
+attributing them to specific protocol mechanisms would require isolating
+the scaffold from the output contract, which the preregistered factorial
+experiment (not yet run) is designed to do.
+On tasks where classic reasoning is already optimal (BBH-arith, ARC),
+TAHOE matches derived quality while reducing output tokens.
 
 \subsection{Difficulty Response}
+\label{subsec:difficulty}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=0.85\textwidth]{figures/difficulty_response.pdf}
-    \caption{Quality delta (top) and token ratio (bottom) vs.\ classic-arm accuracy across 13 benchmark--model pairs (GLM-5.3-Flash, frozen protocol). Error bars: 95\% CI on the delta; $*$ marks significance. Difficulty is anchored to our classic arm, not published leaderboards. Generated by \texttt{benchmarks/difficulty\_curve.py} from committed trial files.}
+    \caption{Quality delta (top) and token ratio (bottom) vs.\ classic-arm accuracy across the benchmark--model pairs of the frozen GLM-5.3-Flash protocol (14 benchmarks in the committed curve data). Error bars: 95\% CI on the delta; $*$ marks significance. Difficulty is anchored to our classic arm, not published leaderboards. Generated by \texttt{benchmarks/difficulty\_curve.py} from committed trial files.}
     \label{fig:difficulty-response}
 \end{figure}
 
-Extending the suite with three harder benchmarks (GPQA-Diamond, AIME 2024+2025, MMLU-Pro, 2{,}476 further trials) shows the advantage is \emph{task-type-driven, not difficulty-monotonic} (Figure~\ref{fig:difficulty-response}).
-Gains peak in a ``sweet band'' of solvable-but-not-trivial tasks requiring multi-step search or discrimination: GSM8K ($+11.8$pp, significant) and MMLU-Pro ($+4.2$pp, $z=2.03$ significant, at $0.88\times$ tokens).
-At both extremes the delta compresses to zero: on knowledge retrieval (GPQA-D, $+1.5$pp n.s.) there is no search space to bound, and near the ceiling ($>$93\% accuracy) there is nothing left to gain.
-Token behavior mirrors this: in the sweet band TAHOE is simultaneously better and cheaper (MMLU-Pro $0.88\times$), while at the ceiling the overhead can dominate (BBH-arith $1.43\times$ at $\Delta\approx 0$).
+Extending the suite with four harder benchmarks (GPQA-Diamond, AIME
+2024+2025, MMLU-Pro, LiveCodeBench; 2{,}776 further trials, all under the
+same fixed 2048-output-token cap) shows the fixed-cap task-success delta is
+\emph{task-type-driven, not difficulty-monotonic}
+(Figure~\ref{fig:difficulty-response}).
+Because the cap binds often, the endpoint is \emph{fixed-2048-token task
+success} and conflates completion with correctness: exact-cap responses
+with empty final answers occur in 313/480 AIME, 187/396 GPQA, 228/1{,}600
+MMLU-Pro, and 207/300 LCB trials, and the archives store them as wrong
+answers.
+Gains peak in a ``sweet band'' of solvable-but-not-trivial multi-step
+tasks: GSM8K ($+11.8$pp \emph{stored grade}; superseded by the current-grader
+derived regrade, which confirms the direction at $+2.1$pp, Holm $p=0.0010$)
+and MMLU-Pro ($+4.25$pp, 95\% task-cluster bootstrap CI $[+2.1, +6.5]$,
+paired permutation $p=0.0002$, Holm-adjusted $p=0.0026$ across the
+14-benchmark family --- significant family-wise as a fixed-cap endpoint at
+$0.70\times$ output tokens) --- but the MMLU-Pro delta is dominated by
+completion (tahoe completed 714/800 vs.\ classic 658/800, while among
+completed responses classic was more accurate: 91.3\% vs.\ 88.9\%).
+At both extremes the delta compresses: on knowledge retrieval (GPQA-D,
+$+1.52$pp, paired permutation $p=0.72$, Holm-adjusted $p=1.00$ --- n.s.) and
+near the ceiling ($>$93\% stored accuracy) there is little to gain. AIME
+($+6.25$pp, raw paired $p=0.024$ but Holm $p=0.26$) and LCB ($+4.67$pp,
+Holm $p=0.66$) trend positive without clearing the family-wise bar.
+Token behavior mirrors this: in the sweet band TAHOE is simultaneously
+better and cheaper under the cap (MMLU-Pro $0.88\times$ total tokens),
+while at the ceiling the overhead can dominate (BBH-arith $1.43\times$
+total tokens at $\Delta\approx 0$).
+The output-compression / finish-within-budget hypothesis --- TAHOE's
+shorter chains more often complete inside the cap --- is the best supported
+reading of the slate deltas; correctness-gain interpretations are not
+supported by the completed-response accuracies.
 
 \subsection{Why TAHOE Saves Tokens}
 
@@ -356,19 +507,25 @@ TAHOE reasoning produces compact structure:
 
 The typed refs force commitment to intermediate values, eliminating the narrative bridge between thinking and answering.
 
-\subsection{Mechanism: Why the Language Helps}
+\subsection{Mechanism Hypotheses: Why the Language Might Help}
 \label{subsec:mechanism}
 
-Three mechanisms, in descending order of measured effect.
+What the archived comparisons measure is the 93-token prompt as a bundle;
+the mechanisms below are \emph{design hypotheses}, not effects isolated by
+the data (archived tahoe-arm trials record zero emitted typed refs, and no
+typed/runtime mechanism was instrumented). The preregistered structure
+$\times$ answer-only factorial experiment
+(\texttt{docs/PREREGISTRATION-structure-answer.md}), prepared but not run,
+is designed to separate them.
 
 \paragraph{1. Search bounding.}
 The dominant token sink in free-form reasoning is wandering: restating the task, exploring dead ends, narrating transitions. TAHOE's protocols require the model to declare its goal, then derive only what the goal needs. The visible trace collapses: on a 200-sample GSM8K study, the median TAHOE output is the answer alone (median 48 output tokens vs.\ 238 for classic).
 
 \paragraph{2. Typed commitment.}
-Free-form reasoning can hedge, contradict itself, and silently substitute hypothesis for fact. The typed-ref system makes each intermediate value carry its epistemic type, and \textsc{Verify} steps are mandatory before \textsc{Answer}. On the benchmarks where classic reasoning loses most (GSM8K, $-11.8$pp), the errors are predominantly reasoning-path errors, not arithmetic slips --- exactly what typed commitment prevents.
+Free-form reasoning can hedge, contradict itself, and silently substitute hypothesis for fact. The typed-ref system is designed to make each intermediate value carry its epistemic type, with \textsc{Verify} steps before \textsc{Answer}; whether this (rather than the answer-only output contract or simple compression) drives the GSM8K delta is exactly what the unrun factorial experiment would test. The derived GSM8K delta ($+2.1$pp on GLM, Holm $p=0.0010$) is a current-grader derived result whose expectations are reconstructed from archived grader details, not independent gold validation (Section~\ref{sec:results}).
 
 \paragraph{3. Internalization.}
-The language operates on thought, not on output. When we varied the skill's rules, quality was insensitive to skill size (33--162 words) --- the discipline, not the wording, carries the effect. Conversely, forcing the notation into the visible output (structured reference lines as an output contract) \emph{decreased} quality and increased tokens: the notation is a thinking discipline, and writing it down taxes every token. We treat this as a design law for reasoning languages: \emph{shape the thought, never constrain the output.}
+The language operates on thought, not on output. When we varied the skill's rules, quality was insensitive to skill size (33--162 words) --- suggestive that the discipline rather than the wording carries the effect, though size-insensitivity alone cannot separate them. Conversely, forcing the notation into the visible output (structured reference lines as an output contract) \emph{decreased} quality and increased tokens in the notation experiments. We state this as a design principle --- \emph{shape the thought, not the visible notation} --- but not as an established law: TAHOE-93 itself imposes an answer-only output contract, so the answer-only contract and the structure scaffold are confounded in every archived arm comparison; separating them is precisely the role of the preregistered factorial experiment (prepared, not run).
 
 \begin{figure}[t]
 \centering
@@ -379,17 +536,129 @@ The language operates on thought, not on output. When we varied the skill's rule
 
 \subsection{Cross-Model Transfer}
 
-On gpt-oss-120b (31{,}824 trials, full test sets), the pattern mirrors Stage-1 expectations for a reasoning-native model: quality matched (92.2\% vs.\ 92.8\% classic) at 0.68$\times$ tokens (250 vs.\ 344 mean output tokens). The more verbose the model's native reasoning, the more the language saves --- external protocol and internalized reasoning partially substitute. The skill transfers without per-model tuning.
+On gpt-oss-120b (31{,}824 trials, same slices except BBH-arith with all 250
+problems), the pattern mirrors Stage-1 expectations for a reasoning-native
+model: derived current-grader quality 93.42\% (classic) vs.\ 93.23\%
+(TAHOE) --- an overall $-0.19$pp shift that is \emph{not itself tested} for
+significance or equivalence (the inferential family is per benchmark;
+within it, GSM8K favors TAHOE at $p=0.0060$ while RACE favors classic at
+$p=0.0162$), at 0.682$\times$ output tokens (184 vs.\
+269 mean output tokens) and 1.011$\times$ \emph{total} tokens (530 vs.\
+524 --- total spend is slightly higher with the skill). The more verbose the
+model's native reasoning, the more output the language saves --- external
+protocol and internalized reasoning partially substitute. The 93-token
+prompt transfers without per-model tuning.
+
+\begingroup\scriptsize\setlength{\tabcolsep}{3pt}
+% CANONICAL_RESULTS:BEGIN summary@oss
+\subsection*{Overall}
+
+\begin{tabular}{@{}l r r r r r r r r r r r r r r r@{}}
+\toprule
+arm & trials & tasks & successes & micro acc (trial-pooled) & macro acc (task-eq-wt) & input tok & output tok & total tok & total spend/success & truncated & cap-exhausted & empty & completed & completed acc & grader err \\
+\midrule
+classic & 15912 & 5304 & 14865 & 0.9342 & 0.9342 & 4063215 & 4278233 & 8341448 & 561.15 & 0 & 32 & 32 & 15880 & 0.9361 & 6 \\
+tahoe & 15912 & 5304 & 14835 & 0.9323 & 0.9323 & 5511207 & 2919526 & 8430733 & 568.30 & 0 & 9 & 10 & 15902 & 0.9329 & 6 \\
+\bottomrule
+\end{tabular}
+
+\begin{tabular}{@{}l r r r r r r r@{}}
+\toprule
+scope & input tok ratio (tahoe/classic) & output tok ratio (tahoe/classic) & total tok ratio (tahoe/classic) & total spend/success classic & total spend/success tahoe & micro acc diff (tahoe-classic) & macro acc diff (tahoe-classic) \\
+\midrule
+overall (all benchmarks pooled) & 1.3564 & 0.6824 & 1.0107 & 561.15 & 568.30 & -0.0019 & -0.0019 \\
+\bottomrule
+\end{tabular}
+% CANONICAL_RESULTS:END summary@oss
+
+% CANONICAL_RESULTS:BEGIN pair@oss
+\subsection*{classic vs tahoe}
+
+\begin{tabular}{@{}l r r r r r r r@{}}
+\toprule
+scope & input tok ratio (tahoe/classic) & output tok ratio (tahoe/classic) & total tok ratio (tahoe/classic) & total spend/success classic & total spend/success tahoe & micro acc diff (tahoe-classic) & macro acc diff (tahoe-classic) \\
+\midrule
+overall (all benchmarks pooled) & 1.3564 & 0.6824 & 1.0107 & 561.15 & 568.30 & -0.0019 & -0.0019 \\
+arc & 1.6119 & 0.7118 & 1.2531 & 256.82 & 323.05 & -0.0037 & -0.0037 \\
+bbh & 1.3534 & 0.8311 & 0.9713 & 968.20 & 934.18 & +0.0067 & +0.0067 \\
+bbh\_arith & 1.8922 & 0.8828 & 1.1976 & 327.48 & 393.25 & -0.0027 & -0.0027 \\
+bbh\_track & 1.3218 & 0.8343 & 1.0065 & 800.37 & 808.84 & -0.0040 & -0.0040 \\
+gsm8k & 1.7139 & 0.4037 & 0.7780 & 476.38 & 365.20 & +0.0139 & +0.0139 \\
+lsat & 1.2065 & 0.7247 & 0.9681 & 1021.87 & 1016.51 & -0.0229 & -0.0229 \\
+mmlu\_acct & 1.5104 & 0.8162 & 1.0971 & 491.77 & 539.50 & +0.0000 & +0.0000 \\
+mmlu\_logic & 1.4869 & 0.8413 & 1.0684 & 556.41 & 597.77 & -0.0053 & -0.0053 \\
+mmlu\_math & 1.5633 & 0.8337 & 1.0123 & 682.92 & 691.30 & +0.0000 & +0.0000 \\
+race & 1.1772 & 0.8455 & 1.1079 & 722.73 & 810.79 & -0.0112 & -0.0112 \\
+\bottomrule
+\end{tabular}
+% CANONICAL_RESULTS:END pair@oss
+
+% CANONICAL_RESULTS:BEGIN paired@oss
+\subsection*{Paired task-cluster comparisons (Holm-corrected)}
+
+\begin{tabular}{@{}l r r r r r r r r r r r@{}}
+\toprule
+comparison & tasks & pairs & task-mean pass (a) & task-mean pass (b) & pass diff (a-b) & mean token diff (a-b) & perm p & perm p (Holm) & pass perm p (Holm) & z p (Holm) & wilcoxon p (Holm) \\
+\midrule
+arc/classic\_vs\_tahoe & 1172 & 3516 & 0.9630 & 0.9593 & +0.0037 & -62.6 & 0.0001 & 0.0010 & 1.0000 & 1.0000 & 0.0000 \\
+bbh/classic\_vs\_tahoe & 250 & 750 & 0.9907 & 0.9973 & -0.0067 & +27.5 & 0.0098 & 0.0294 & 1.0000 & 0.5742 & 0.1583 \\
+bbh\_arith/classic\_vs\_tahoe & 250 & 750 & 0.9987 & 0.9960 & +0.0027 & -64.6 & 0.0001 & 0.0010 & 1.0000 & 1.0000 & 0.0000 \\
+bbh\_track/classic\_vs\_tahoe & 250 & 750 & 1.0000 & 0.9960 & +0.0040 & -5.2 & 0.3292 & 0.6583 & 1.0000 & 0.5742 & 0.1669 \\
+gsm8k/classic\_vs\_tahoe & 1319 & 3957 & 0.9366 & 0.9505 & -0.0139 & +99.0 & 0.0001 & 0.0010 & 0.0060 & 0.0060 & 0.0000 \\
+lsat/classic\_vs\_tahoe & 510 & 1530 & 0.8536 & 0.8307 & +0.0229 & +27.8 & 0.0001 & 0.0010 & 0.2032 & 0.1659 & 0.0008 \\
+mmlu\_acct/classic\_vs\_tahoe & 282 & 846 & 0.8960 & 0.8960 & -0.0000 & -42.8 & 0.0001 & 0.0010 & 1.0000 & 1.0000 & 0.0000 \\
+mmlu\_logic/classic\_vs\_tahoe & 126 & 378 & 0.9550 & 0.9497 & +0.0053 & -36.3 & 0.0001 & 0.0010 & 1.0000 & 1.0000 & 0.0000 \\
+mmlu\_math/classic\_vs\_tahoe & 100 & 300 & 0.9667 & 0.9667 & +0.0000 & -8.1 & 0.6593 & 0.6593 & 1.0000 & 1.0000 & 0.0550 \\
+race/classic\_vs\_tahoe & 1045 & 3135 & 0.8982 & 0.8871 & +0.0112 & -70.0 & 0.0001 & 0.0010 & 0.0162 & 0.0150 & 0.0000 \\
+\bottomrule
+\end{tabular}
+
+Multiplicity: holm step-down correction over 10 comparisons (family: comparisons); pairing key: (benchmark, task\_id, trial).
+% CANONICAL_RESULTS:END paired@oss
+\endgroup
 
 \subsection{Skill-Design Ablation}
 
-The 93-token skill is size-insensitive: variants at 33--162 words perform within 3pp of each other on GSM8K and LSAT (91--94\%), indicating the discipline --- not the wording --- carries the effect. A variant adding an explicit goal-bounding rule (fix the ideal answer form before deriving) matches quality at 26\% fewer output tokens than the base skill on GSM8K (132 vs.\ 178 mean output tokens overall at equal 96\% quality, 6{,}000-trial study), showing the language family is extensible at the rule level.
+The 93-token skill is size-insensitive: variants at 33--162 words perform within 3pp of each other on GSM8K and LSAT (91--94\%), which is consistent with the discipline --- rather than the wording --- carrying the effect (size-insensitivity alone cannot separate discipline from wording; the answer-only final rule is common to all variants). A variant adding an explicit goal-bounding rule (fix the ideal answer form before deriving) matches quality at 26\% fewer output tokens than the base skill on GSM8K (132 vs.\ 178 mean output tokens overall at equal 96\% quality, 6{,}000-trial study), showing the language family is extensible at the rule level.
 
 \subsection{Statistical Significance}
 
-On the full-test-set run (31{,}524 trials), overall quality moves from 88.9\% (classic) to 91.8\% (TAHOE) --- a $+2.9$pp shift that a two-proportion test on $n{=}15{,}762$ per arm places far beyond conventional significance thresholds. The token reduction is equally decisive: the mean output ratio is $0.51\times$, and per-benchmark ratios never exceed $0.84\times$.
+All significance statements below come from the canonical paired
+comparisons of the derived regrade
+(\texttt{benchmarks/canonical\_results.py}: trials paired by exact
+\texttt{(benchmark, task\_id, trial)} identity, repeated trials averaged
+within tasks, two-sided pass-rate permutation tests Holm-adjusted over the
+10-comparison family per model). The \emph{overall} micro-accuracy deltas
+($+0.49$pp on GLM, $-0.19$pp on gpt-oss) are deliberately \emph{not} called
+significant or null-tested: there is no overall confirmatory test and no
+prespecified equivalence margin. The family-wise significant per-benchmark
+results are: GSM8K --- TAHOE higher on both models (GLM $+2.1$pp, Holm
+$p=0.0010$; gpt-oss $+1.4$pp, $p=0.0060$) --- and RACE --- classic higher
+on gpt-oss ($+1.1$pp, $p=0.0162$); every other comparison is n.s.\ (GLM
+LSAT $p=0.208$; gpt-oss LSAT $p=0.203$). Two caveats: the derived
+expectations are reconstructed from archived grader details (current-grader
+derived results, not independent gold), and all trials ran under a fixed
+2048-output-token cap with exact-cap empty responses present in both arms
+(derived stage-1 cap-exhausted counts: 88 classic / 49 tahoe on GLM, 32/9
+on gpt-oss). The token reductions are exact: the summed output ratio is
+0.511$\times$ (GLM) and 0.682$\times$ (gpt-oss); total-token ratios are
+0.931$\times$ and 1.011$\times$.
 
-The primary finding: TAHOE achieves \emph{higher quality with 49\% fewer reasoning tokens} on GLM-5.3-Flash, and quality-matched $-32\%$ tokens on gpt-oss-120b.
+Separately, the stored-grade, fixed-cap \emph{harder-slate} analysis
+(\texttt{benchmarks/difficulty\_curve.py} \texttt{compute\_curve}, run
+offline on the archived trials with the same keyed pairing and a Holm
+correction over the 14-benchmark family) found the stored-grade GSM8K
+delta ($+11.78$pp, Holm $p=0.0014$) and the MMLU-Pro fixed-cap delta
+($+4.25$pp, Holm $p=0.0026$) family-wise significant; the stored GSM8K
+figure is superseded by the derived $+2.1$pp above, and the MMLU-Pro figure
+remains a stored-grade fixed-cap endpoint
+(Section~\ref{subsec:difficulty}).
+
+The primary finding: TAHOE achieves $49\%$ fewer output tokens at derived
+$+0.49$pp overall (per-benchmark Holm family: GSM8K significantly higher)
+on GLM-5.3-Flash, and $32\%$ fewer output tokens
+at $+1\%$ \emph{total} spend with a small derived overall decrement on
+gpt-oss-120b (per-benchmark family: GSM8K higher, RACE lower).
 
 \section{Related Work}
 \label{sec:related}
@@ -446,16 +715,18 @@ Behavior trees~\cite{colledanchise2018bt} compose actions through small control 
 TAHOE adopts explicit status outcomes and selector-like fallback (in \textsc{Try}) but uses a graph-based program representation rather than tree shape, because data dependencies and event history are graph-structured.
 
 \paragraph{Distinction.}
-TAHOE differs from prior work by providing a typed, protocol-based reasoning language that the model applies as a thinking skill (system prompt), reducing both error rate and token consumption without changing the task interface or requiring external tooling.
+TAHOE differs from prior work by providing a typed, protocol-based reasoning language that the model applies as a thinking skill (system prompt), reducing output-token consumption at comparable overall quality (with family-wise significant GSM8K gains on both models) without changing the task interface or requiring external tooling.
 
 \section{Limitations}
 \label{sec:limitations}
 
 \begin{itemize}[nosep,leftmargin=*]
-    \item \textbf{Two models}: GLM-5.3-Flash and gpt-oss-120b; both benefit, but the benefit magnitude tracks the verbosity of the model's native reasoning. Stronger reasoning-native models may show smaller token savings.
-    \item \textbf{Full test sets, 3 trials}: 63{,}348 trials total; quality deltas on most benchmarks are within noise --- the robust effects are the token reductions and the GSM8K/LSAT gains.
-    \item \textbf{System prompt overhead}: TAHOE adds $\sim$93 input tokens per call; for very short tasks this offsets output savings.
-    \item \textbf{Grader-format sensitivity}: verbose LaTeX answers are fragile under numeric extraction; three grader artifacts were caught and fixed during this work (parenthesized letters, thousands-separated numbers, extraction priority). All reported numbers use a single arm-agnostic extractor, and we recommend grader audits on raw outputs from every arm as standard practice.
+    \item \textbf{Two models}: GLM-5.3-Flash and gpt-oss-120b. The output-token saving tracks the verbosity of the model's native reasoning (0.511$\times$ vs.\ 0.682$\times$); stronger reasoning-native models may compress less, and on gpt-oss-120b total spend is $\sim$1\% \emph{higher} with the skill while the derived overall quality delta is $-0.19$pp --- itself untested (no overall confirmatory test, no equivalence margin prespecified).
+    \item \textbf{Exact slices, 3 trials}: 63{,}348 trials total, but not all full test sets --- RACE is the first question of each of 1{,}045 sampled high-school articles, and BBH-arith covers 200 tasks in the GLM run vs.\ 250 in the gpt-oss run. Derived quality deltas on most benchmarks do not clear the Holm-corrected family; the robust effects are the output-token reductions. The only family-wise significant derived deltas are GSM8K (TAHOE higher on both models) and RACE (classic higher on gpt-oss).
+    \item \textbf{Fixed 2048-token cap}: every trial ran with a 2048-output-token cap; exact-cap responses with empty final answers exist in every archive (stored as wrong answers), so fixed-cap task success conflates completion with correctness, and harder-benchmark deltas are consistent with a completion channel. The archives carry no \texttt{finish\_reason}: the zero canonical \texttt{truncated} counters are absence-of-field, not evidence of zero truncation (derived truncated-class counts: 3 GLM, 0 gpt-oss).
+    \item \textbf{Prompt-bundle manipulation}: the comparisons vary only the 93-token prompt as a whole; typed refs, protocols, and the runtime are design artifacts whose individual mechanisms were not isolated. The preregistered structure $\times$ answer-only factorial experiment is prepared but has not been run.
+    \item \textbf{System prompt overhead}: TAHOE adds $\sim$93 input tokens per call; for very short tasks this offsets output savings (visible in the total-token ratios: 0.931$\times$ and 1.011$\times$).
+    \item \textbf{Grader-format sensitivity, resolved by the derived pipeline}: verbose LaTeX answers are fragile under numeric extraction; grader artifacts were caught and fixed during this work (parenthesized letters, thousands-separated numbers, extraction priority), and the GSM8K grader itself went through several versions --- the archives hold two different stored grade sets for GSM8K. The full Stage-1 regrade CLI (\texttt{benchmarks/fix\_stage1\_extraction.py}, required \texttt{-{}-input}/\texttt{-{}-output}; helper pipeline \texttt{benchmarks/stage1\_regrade.py}) has now been run over all ten benchmarks of both archives, producing the derived publication evidence (\texttt{benchmarks/results/derived/2026-11-18-stage1-full-v3/}); its GSM8K rows are graded by the current numeric-v6 extractor (earlier full regrades --- v2 with the v5 extractor, v1 with the v4 --- are superseded, preserved unchanged). Its remaining limitation is that expectations are reconstructed from archived grader details rather than independent gold data, two malformed GSM8K tasks yield 12 \texttt{grader\_error} trials per model (6 per arm; counted as failures), and ARC's 22 numeric answerKeys per model use a positional fallback. We recommend grader audits on raw outputs from every arm as standard practice.
     \item \textbf{Implemented subset}: the formal semantics describe the full design lattice; the implemented type checker covers the core epistemic chain ($G \to Q \to U \to A \to H \to E \to F \to V$ plus $C \to G$).
 \end{itemize}
 
@@ -463,6 +734,8 @@ TAHOE differs from prior work by providing a typed, protocol-based reasoning lan
 \label{sec:future}
 
 \begin{itemize}[nosep,leftmargin=*]
+    \item \textbf{Run the preregistered factorial}: execute \texttt{docs/PREREGISTRATION-structure-answer.md} to separate the structure scaffold from the answer-only output contract under explicit budget regimes.
+    \item \textbf{Independent gold validation}: validate the reconstructed expected answers of the derived regrade against upstream gold data, replacing grader-derived expectations with independently audited ones (\texttt{benchmarks/results/derived/2026-11-18-stage1-full-v3/}).
     \item \textbf{Reinforcement learning}: the language's semantics provide machine-verified step labels (typed-commitment and DONE checks) at zero annotation cost --- a reward signal for training the discipline into the weights rather than prompting it.
     \item \textbf{Protocol learning}: mine successful reasoning trajectories to discover new protocols automatically.
     \item \textbf{Pass$^k$ reliability}: measure pass$^k$ (reliability across $k$ attempts), not just pass@1, to assess whether TAHOE reduces variance.

@@ -132,6 +132,24 @@ def test_compute_all_metrics_keys_present():
     }
 
 
+def test_compute_all_metrics_always_json_safe_floats():
+    """RE/RC/RR are always floats (0.0 on zero denominators), never None.
+
+    This differs by design from report cost-per-success, which is None
+    when a group has zero successes: here a zero denominator means "no
+    tokens / refs to be efficient with", so 0.0 is the defined value.
+    """
+    for summary in (
+        {},
+        {"total_tokens": 0, "output_tokens": 0},
+        {"verified_logical_steps": 10},
+    ):
+        result = compute_all_metrics(summary)
+        for value in result.values():
+            assert isinstance(value, float)
+            assert value == 0.0
+
+
 # -- edge: combined zero scenario --------------------------------------
 
 

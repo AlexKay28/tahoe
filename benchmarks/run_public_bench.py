@@ -27,7 +27,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from runner_classic import run as run_classic
+from runner_classic import (
+    grading_outcome,
+    outcome_fields,
+    run as run_classic,
+)
 from report import generate_markdown_table, generate_json_report, generate_per_task_comparison
 from metrics import compute_all_metrics, count_typed_refs
 
@@ -109,22 +113,14 @@ def grade_math(model_answer, expected_answer):
 # RACE grader: answer is A/B/C/D
 def grade_race(model_answer, expected_answer):
     """RACE: match answer letter (A/B/C/D)."""
-    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
+    model_letter = extract_choice_letter(model_answer, "ABCD")
     expected = expected_answer.strip().upper()
-    if len(model_letter) > 1:
-        match = re.search(r'\b([A-D])\b', model_letter)
-        if match:
-            model_letter = match.group(1)
     return model_letter == expected, f"expected={expected}, got={model_letter}"
 
 # MMLU grader: answer is index (0-3), choices are A-D
 def grade_mmlu(model_answer, expected_answer, choices=None):
     """MMLU: answer is an index 0-3, model outputs a letter."""
-    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
-    if len(model_letter) > 1:
-        match = re.search(r'\b([A-D])\b', model_letter)
-        if match:
-            model_letter = match.group(1)
+    model_letter = extract_choice_letter(model_answer, "ABCD")
     expected_idx = int(expected_answer)
     expected_letter = chr(ord("A") + expected_idx)
     return model_letter == expected_letter, f"expected={expected_letter}, got={model_letter}"
@@ -135,106 +131,423 @@ def load_skill():
     return load_arm_prompt("tahoe")
 
 
+def _numeric_equal(a, b, rel_tol=1e-6):
+    """Numeric answer equality: 42 == '42.00', '16,000' == 16000, '$5' == 5.
+
+    Falls back to exact string comparison when either side is not a number.
+    Arm-agnostic: used identically for every arm.
+    """
+    def to_float(x):
+        s = str(x).replace(",", "").replace("\u202f", "").replace(" ", "")
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    fa, fb = to_float(a), to_float(b)
+    if fa is not None and fb is not None:
+        return abs(fa - fb) <= rel_tol * max(1.0, abs(fa), abs(fb))
+    return str(a).strip() == str(b).strip()
+
+
+# Final-answer letter marker: 'Answer: D', 'the answer is E', 'FINAL ANSWER: B'.
+# A separator ('is' or ':'/'-') is REQUIRED so option discussion like
+# 'Answer (E) makes the common mistake...' is not mistaken for a declaration.
+_ANSWER_MARKER_TEMPLATE = (
+    r"(?:final\s+)?answer\b\s*(?:is\b\s*[:\-]?|[:\-])\s*\(?([{letters}])\)?\b"
+)
+
+
+def extract_choice_letter(model_answer, letters="ABCD"):
+    """Extract the model's final multiple-choice letter (arm-agnostic).
+
+    Priority (regression fix: an explicit final-answer marker must win over
+    earlier discussed options):
+    1. the whole (markdown-stripped) answer is a bare letter or '(X)';
+    2. the LAST explicit marker ('Answer: D', 'the answer is B', ...);
+    3. the last non-empty line is a bare letter or '(X)';
+    4. fallback: first standalone letter anywhere (legacy behavior).
+    """
+    clean = re.sub(r'\*+', '', str(model_answer)).strip()
+    marker = re.compile(_ANSWER_MARKER_TEMPLATE.format(letters=letters), re.I)
+    m = re.fullmatch(rf"\(?([{letters}])\)?[\s.,:!]*", clean, re.I)
+    if m:
+        return m.group(1).upper()
+    marks = marker.findall(clean)
+    if marks:
+        return marks[-1].upper()
+    lines = [line.strip() for line in clean.splitlines() if line.strip()]
+    if lines:
+        m = re.fullmatch(rf"\(?([{letters}])\)?[\s.,:!]*", lines[-1], re.I)
+        if m:
+            return m.group(1).upper()
+    m = re.search(rf"\b([{letters}])\b", clean.upper())
+    if m:
+        return m.group(1)
+    return clean[:1].upper() if clean else ""
+
+
 def extract_gsm8k_gold(answer_text):
-    """GSM8K official: extract the number after #### in the gold answer."""
-    match = re.search(r'####\s*([\d,]+)', answer_text)
-    return match.group(1).replace(',', '') if match else ""
+    """GSM8K official: extract the number after #### in the gold answer.
+
+    Separator-aware (commas, thin spaces, decimals) so '#### 43,200' and
+    '#### 42.00' are extracted whole; markdown headings ('#### Section')
+    match nothing, same as before.
+    """
+    match = re.search(rf"####\s*\$?\s*({_SEP_NUM_RE})", answer_text)
+    if not match:
+        return ""
+    return (match.group(1)
+            .replace(",", "")
+            .replace("\u202f", "")
+            .replace(" ", ""))
 
 
 _SEP_NUM_RE = r"-?\d{1,3}(?:[,\u202f ]\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?"
+
+# Explicit numeric final-answer marker: 'Answer: N' — the number must
+# follow the marker immediately (only '$'/whitespace between), so the
+# marker states the answer rather than discussing it ('Answer: After 3
+# hours the trains are 270 miles apart' does NOT declare 3). The colon
+# keeps option discussion ('Answer (E) makes...') out, and the LAST
+# occurrence wins, matching the marker semantics of the choice graders.
+_ANSWER_MARKER_RE = re.compile(
+    r"\banswer\s*:\s*\$?\s*(" + _SEP_NUM_RE + r")", re.I
+)
+
+# A same-quantity restatement connector: after a number and its unit,
+# '(' starts a parenthetical restatement, ', or' / 'which is' / 'i.e.' /
+# 'aka' / an em-dash starts a verbal one. The gap before the connector
+# stays on one line and is free of digits, so the FIRST number is the
+# one being restated; '\(' (LaTeX inline math) is not a restatement.
+_RESTATEMENT_CONNECTOR_RE = re.compile(
+    r"(?P<gap>[^\d()\n]{0,40}?)"
+    r"(?P<connector>(?<!\\)\(|,?\s*(?:which\s+is|i\.e\.|aka|or)\b|[—–])"
+)
+
+# A trailing 'NUM unit (...digits...)' parenthetical that restates the
+# stated answer in other units or as a breakdown.
+_TRAILING_PAREN_RESTATE_RE = re.compile(
+    "(" + _SEP_NUM_RE + r")[^\d()\n]{0,40}(?<!\\)\(([^()]*)\)\s*[.!]*\s*$"
+)
+
+# Words that explicitly mark a parenthetical as a restatement.
+_PAREN_KEYWORD_RE = re.compile(r"\b(?:which\s+is|i\.?e\.|aka)\b", re.I)
+
+# A clock-form answer: H:MM with an explicit am/pm marker. The minutes
+# must be exactly two digits, the marker may be upper-case, dotted
+# ('a.m.', 'P.M.') or separated by a plain/thin space ('2:00\u202fpm'),
+# and the whole time must END the span. Ratios ('3:1' — one-digit
+# minute, no marker), plain times ('at 2:00'), decimals ('2.50'), colon
+# labels ('Part 2: 00') and clock mentions with later numeric context
+# ('... at 2:00 pm and walks 5 miles') therefore never match.
+_CLOCK_TIME_RE = re.compile(
+    r"\b(\d{1,2}):(\d{2})[ \u202f]*([ap])\.?[ \u202f]*m\.?(?![A-Za-z])"
+    r"[\s.,;:!)*\]}]*$",
+    re.I,
+)
+
+# LaTeX text-mode wrappers and thin spacing that may appear inside a
+# \boxed{...} clock answer ('\text{:}', '\text{ pm}', '2\!:\!00').
+# Unwrapped ONLY for the boxed clock-form check; the generic number
+# extraction of boxed content is untouched.
+_BOXED_TEXT_WRAP_RE = re.compile(r"\\(?:text|mathrm)\s*\{([^{}]*)\}")
+_BOXED_SPACING_TOKENS = ("\\!", "\\,", "\\;", "\\ ", "\\:")
+
+
+def _clean_number(token):
+    """Normalize an extracted numeric token: drop thousands separators."""
+    return token.replace(",", "").replace("\u202f", "").replace(" ", "")
+
+
+def _paren_restates(content):
+    """Does a parenthetical restate a same-quantity answer?
+
+    Real restatements carry words (units) and either an explicit
+    'which is' or more than one number ('2 hours 40 minutes', '3 onions
+    and 1 potato'), so bare number lists ('1, 3, 6') and single-total
+    asides ('13 letters altogether') are left alone.
+    """
+    if not re.search(r"[A-Za-z]", content) or not re.search(r"\d", content):
+        return False
+    return bool(
+        _PAREN_KEYWORD_RE.search(content)
+        or len(re.findall(_SEP_NUM_RE, content)) > 1
+    )
+
+
+def _clock_hour(text):
+    """Stated hour when the text ENDS with an H:MM am/pm clock time.
+
+    A clock-form answer states the hour ('2:00 pm' -> '2',
+    '12:30pm' -> '12'): the H:MM pair is not a number, and the broad
+    last-number heuristic would otherwise return the minutes ('00').
+    The end anchor and the required am/pm marker keep every
+    non-clock colon form (ratios, plain times, decimals, colon labels)
+    and clock mentions followed by later numeric context untouched.
+    """
+    m = _CLOCK_TIME_RE.search(text)
+    return m.group(1) if m else None
+
+
+def _boxed_clock_hour(inner):
+    """Stated hour when a \\boxed{...} answer is a LaTeX clock time.
+
+    '\\boxed{2\\text{:}00 \\text{ pm}}' states the hour 2: the text-mode
+    wrappers and thin LaTeX spacing are unwrapped for the clock-form
+    check only ('2\\text{:}00 \\text{ pm}' reads as '2:00 pm'), so every
+    other boxed form — plain numbers, thousands separators, units,
+    ratios without an am/pm marker — keeps the generic last-number
+    extraction unchanged.
+    """
+    plain = _BOXED_TEXT_WRAP_RE.sub(r"\1", inner)
+    for token in _BOXED_SPACING_TOKENS:
+        plain = plain.replace(token, "")
+    return _clock_hour(plain)
+
+
+def _marker_number(norm):
+    """Number stated by an explicit final-answer marker, if any.
+
+    The LAST 'Answer:' wins and the answer number must follow the marker
+    immediately ('Answer: 448 mL of medicine in 8 doses.' -> 448), so
+    trailing context can no longer steal the extraction while a marker
+    discussing its answer ('Answer: After 3 hours ... 270 miles apart')
+    is left to the later heuristics.
+    """
+    last = None
+    for last in _ANSWER_MARKER_RE.finditer(norm):
+        pass
+    return _clean_number(last.group(1)) if last else None
+
+
+def _span_number(span):
+    """Answer number of a short final-answer span (a bold span).
+
+    Same-quantity restatements resolve to their FIRST number: in
+    '225 minutes, or 3 hours and 45 minutes' (or '160 minutes (2 hours 40
+    minutes)') the leading number is the stated answer and the rest merely
+    restates it in other units. Anything else keeps the last-number
+    semantics ('Count: 3 routes' -> 3). A parenthetical restatement must
+    carry words and digits, so number lists like '(1, 3, 6)' do not
+    trigger it; a verbal connector requires a unit word in the gap, so
+    '3 or 4' does not either. A span ending in an H:MM am/pm clock
+    time states its hour ('**2:00 pm**' -> 2).
+    """
+    clock = _clock_hour(span)
+    if clock is not None:
+        return clock
+    nums = list(re.finditer(_SEP_NUM_RE, span))
+    if not nums:
+        return None
+    first = nums[0]
+    m = _RESTATEMENT_CONNECTOR_RE.match(span[first.end():])
+    if m:
+        tail = span[first.end() + m.end():]
+        if m.group("connector") == "(":
+            close = tail.find(")")
+            content = tail[: close if close != -1 else len(tail)]
+            restates = bool(
+                re.search(r"[A-Za-z]", content) and re.search(r"\d", content)
+            )
+        else:
+            restates = bool(
+                re.search(r"[A-Za-z]", m.group("gap"))
+                and re.search(r"\d", tail)
+            )
+        if restates:
+            return first.group(0)
+    return nums[-1].group(0)
+
+
+def _last_number(norm):
+    r"""Last separator-aware number, with a trailing-restatement guard.
+
+    A final 'NUM unit (...digits...)' parenthetical that restates the
+    stated answer in other units or as a breakdown ('216 seconds (which
+    is 3 minutes 36 seconds)' -> 216, '4 (3 onions and 1 potato)' -> 4)
+    hands the extraction to the number before the parenthesis instead of
+    the broad last-number heuristic. The guard is end-anchored, stays on
+    one line and skips LaTeX '\(...\)' math, so ordinary trailing text
+    keeps the last-number behavior. A trailing H:MM am/pm clock time
+    states its hour instead ('2:00 pm' -> 2, '12:30pm' -> 12).
+    """
+    m = _TRAILING_PAREN_RESTATE_RE.search(norm)
+    if m and _paren_restates(m.group(2)):
+        return m.group(1)
+    clock = _clock_hour(norm)
+    if clock is not None:
+        return clock
+    nums = re.findall(_SEP_NUM_RE, norm)
+    return nums[-1] if nums else None
 
 
 def extract_model_number(text):
     """Extract a number from model output — same for both arms.
 
-    v3 (grader-format fix, arm-agnostic). Priority order:
-    1. #### N          (official GSM8K marker)
-    2. \\boxed{...}    (nested-brace tolerant)
-    3. LAST bold span  (**Answer: $12** / **It takes 5 hours**)
-    4. 'answer is N' / 'total = N' (last occurrence)
-    5. last separator-aware number
-    Handles '1{,}430', '2\\,000', '$2,180', thin spaces. v1 split formatted
-    numbers ('1,430' -> '430'); v2 broke on brace-stripping order — both
-    under-credited verbose LaTeX answers (the BBH lesson, again).
+    v6 (OSS-audit LOW: clock-form answers state their hour). Priority:
+    1. #### N          (official GSM8K marker; decimals and '$' handled,
+                        so '#### 42.50' is not truncated to '42')
+    2. \\boxed{...}    (nested-brace tolerant; LaTeX thousands separators
+                        normalized first: '43{,}200' -> 43200; a boxed
+                        LaTeX clock time states its hour:
+                        '\\boxed{2\\text{:}00 \\text{ pm}}' -> 2)
+    3. 'Answer: N'     (LAST marker; N follows the marker immediately, so
+                        trailing context like 'in 8 doses' no longer wins
+                        while 'Answer: After 3 hours ... 270 miles apart'
+                        still falls through to the bold span)
+    4. LAST bold span  (**Answer: $12** / **It takes 5 hours**), with
+                        same-quantity restatements resolved to their
+                        first number (**225 minutes, or 3 hours and 45
+                        minutes** -> 225)
+    5. 'answer is N' / 'total = N' (last occurrence)
+    6. last separator-aware number, with an end-anchored unit-restatement
+       guard ('216 seconds (which is 3 minutes 36 seconds)' -> 216);
+       bold spans and the bare-text fallback also resolve a TRAILING
+       H:MM am/pm clock time to its stated hour ('2:00 pm' -> 2,
+       '**12:30pm**' -> 12, thin-space/upper-case/dotted markers too)
+       instead of the minutes ('00'). End-anchored on the am/pm marker,
+       so ratios ('3:1'), plain times ('at 2:00'), decimals ('2.50'),
+       colon labels ('Part 2: 00') and clock mentions followed by later
+       numeric context ('... 2:00 pm and walks 5 miles' -> 5) are not
+       touched.
+    Handles '1,430', '2\\,000', '$2,180', thin spaces, negatives, and
+    decimals at every step. v4 lost correct stated answers to the broad
+    last-bold/last-number heuristics when the answer sentence carried a
+    unit-conversion restatement ('**Answer: 160 minutes (2 hours 40
+    minutes).**' -> 40) or trailing context ('**Answer: 448 mL of
+    medicine in 8 doses.**' -> 8); v5 then lost clock-form answers to
+    the same heuristics ('2:00 pm' -> '00' vs gold hour 2).
     """
     text = str(text).strip()
-    match = re.search(r"####\s*([\d,]+)", text)
+    match = re.search(rf"####\s*\$?\s*({_SEP_NUM_RE})", text)
     if match:
-        return match.group(1).replace(",", "")
+        return _clean_number(match.group(1))
     sep = _SEP_NUM_RE
     boxed = re.search(r"\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}", text)
     if boxed:
-        nums = re.findall(sep, boxed.group(1))
+        inner = (
+            boxed.group(1)
+            .replace("{,}", ",")
+            .replace("\\,", "")
+            .replace("\\ ", "")
+        )
+        clock = _boxed_clock_hour(inner)
+        if clock is not None:
+            return clock
+        nums = re.findall(sep, inner)
         if nums:
-            return nums[-1].replace(",", "").replace("\u202f", "")
+            return _clean_number(nums[-1])
     norm = (
         text.replace("\\,", "")
         .replace("\\ ", "")
         .replace("\u202f", " ")
         .replace("$", "")
     )
+    marker = _marker_number(norm)
+    if marker is not None:
+        return marker
     bolds = re.findall(r"\*\*([^*]+)\*\*", norm)
     if bolds:
-        nums = re.findall(sep, bolds[-1])
-        if nums:
-            return nums[-1].replace(",", "")
+        span_num = _span_number(bolds[-1])
+        if span_num is not None:
+            return _clean_number(span_num)
     matches = re.findall(
         r"(?:answer|result|total)\s*(?:is|=|:)\s*(" + sep + r")", norm, re.I)
     if matches:
-        return matches[-1].replace(",", "")
-    nums = re.findall(sep, norm)
-    if nums:
-        return nums[-1].replace(",", "")
+        return _clean_number(matches[-1])
+    last = _last_number(norm)
+    if last is not None:
+        return _clean_number(last)
     return norm[:50]
 
 
 def grade_gsm8k(model_answer, expected_answer):
-    """GSM8K: extract number from model output, compare to gold number."""
+    """GSM8K: extract number from model output, compare to gold number.
+
+    Numeric comparison (42 == 42.00, '16,000' == 16000, '$5' == 5) — the
+    string comparison under-credited correct answers that spelled the
+    number differently from the gold ('#### 42' vs '42.00').
+    """
     model_num = extract_model_number(model_answer)
     expected_num = extract_gsm8k_gold(expected_answer)
-    return model_num == expected_num, f"expected={expected_num}, got={model_num}"
+    ok = _numeric_equal(model_num, expected_num)
+    return ok, f"expected={expected_num}, got={model_num}"
 
 
 def grade_mmlu_pro(model_answer, expected_answer):
     """MMLU-Pro: up to 10 options, answer letter A-J. Official eval = letter match."""
-    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
-    if len(model_letter) > 1:
-        match = re.search(r'\b([A-J])\b', model_letter)
-        if match:
-            model_letter = match.group(1)
-    return model_letter == expected_answer.strip().upper(), f"expected={expected_answer}, got={model_letter}"
+    model_letter = extract_choice_letter(model_answer, "ABCDEFGHIJ")
+    expected = expected_answer.strip().upper()
+    return model_letter == expected, f"expected={expected}, got={model_letter}"
 
 
 def grade_aime(model_answer, expected_answer):
     """AIME: integer answer 0-999. Gold is a bare integer (no #### marker),
-    so both sides go through the same arm-agnostic v3 extractor."""
+    so both sides go through the same arm-agnostic v6 extractor."""
     model_num = extract_model_number(model_answer)
     gold_num = extract_model_number(expected_answer)
-    ok = model_num != "" and model_num == gold_num
+    ok = model_num != "" and _numeric_equal(model_num, gold_num)
     return ok, f"expected={gold_num}, got={model_num}"
 
 
-def grade_arc(model_answer, expected_answer):
-    """ARC: match answerKey (A/B/C/D). Official eval = exact letter match."""
-    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
-    expected = expected_answer.strip().upper()
-    if len(model_letter) > 1:
-        match = re.search(r'\b([A-D])\b', model_letter)
-        if match:
-            model_letter = match.group(1)
-    return model_letter == expected, f"expected={expected}, got={model_letter}"
+def _arc_expected_letters(expected_answer, labels=None):
+    """Normalize an ARC answerKey to the letter scheme the prompt requests.
+
+    ARC-Challenge items mix letter answerKeys ('A'-'D') with numeric labels
+    ('1'-'4'). The prompt always asks 'Answer with just the letter (A, B, C,
+    or D)', so a numeric key maps positionally to its letter ('3' -> 'C').
+    With ``labels`` (the dataset's choice labels) the mapping uses the actual
+    label position; otherwise digits 1-4 map directly.
+    """
+    expected = str(expected_answer).strip()
+    if labels:
+        for idx, label in enumerate(labels):
+            if str(label).strip().upper() == expected.upper():
+                return chr(ord("A") + idx), expected.upper()
+    if expected.upper() in ("A", "B", "C", "D"):
+        return expected.upper(), expected.upper()
+    try:
+        idx = int(expected)
+    except ValueError:
+        return expected.upper(), expected.upper()
+    letter = chr(ord("A") + idx - 1) if 1 <= idx <= 4 else expected.upper()
+    return letter, expected.upper()
+
+
+def grade_arc(model_answer, expected_answer, labels=None):
+    """ARC: match answerKey (A/B/C/D). Official eval = exact letter match.
+
+    Numeric answerKeys ('1'-'4') are mapped to the requested letter scheme
+    (regression: expected=3, model answered 'C' for the third choice and was
+    marked wrong). The model may answer with either the letter or the raw
+    numeric label of the correct choice.
+    """
+    model_letter = extract_choice_letter(model_answer, "ABCD")
+    expected_letter, expected_raw = _arc_expected_letters(expected_answer, labels)
+    ok = model_letter == expected_letter or model_letter == expected_raw
+    return ok, f"expected={expected_letter}, got={model_letter}"
 
 
 def grade_bbh(model_answer, expected_answer):
     """BBH: match the correct option letter. Official eval = letter equality.
 
     Accepts '(X)', 'X', or any text containing the letter as a word/paren.
+    An explicit final-answer marker ('Answer: (E)', 'the answer is G') wins
+    over earlier discussed options; otherwise the legacy '(X)'-first and
+    bare-letter-first behavior is preserved.
     """
     model_clean = re.sub(r'\*+', '', model_answer.strip())
     expected_clean = expected_answer.strip()
     expected_match = re.search(r'\(([A-Z])\)', expected_clean)
     expected_letter = expected_match.group(1) if expected_match else expected_clean
 
+    # 0. explicit final-answer marker (last one wins)
+    marker = re.compile(_ANSWER_MARKER_TEMPLATE.format(letters="A-Z"), re.I)
+    marks = marker.findall(model_clean)
+    if marks:
+        return marks[-1].upper() == expected_letter, (
+            f"expected={expected_letter}, got={marks[-1].upper()}"
+        )
     # 1. (X) pattern
     model_match = re.search(r'\(([A-Z])\)', model_clean)
     if model_match:
@@ -251,20 +564,18 @@ def grade_bbh(model_answer, expected_answer):
 
 
 def grade_bbh_arith(model_answer, expected_answer):
-    """BBH multistep arithmetic: compare final number."""
+    """BBH multistep arithmetic: compare final number (numeric equality,
+    so '1,080' == 1080 and '42.00' == 42)."""
     model_num = extract_model_number(model_answer)
     expected_num = extract_model_number(expected_answer)
-    return model_num == expected_num, f"expected={expected_num}, got={model_num}"
+    ok = _numeric_equal(model_num, expected_num)
+    return ok, f"expected={expected_num}, got={model_num}"
 
 
 def grade_lsat(model_answer, expected_answer):
     """LSAT: answer is a letter (A-E)."""
-    model_letter = re.sub(r'\*+', '', model_answer.strip()).upper()
+    model_letter = extract_choice_letter(model_answer, "ABCDE")
     expected = expected_answer.strip().upper()
-    if len(model_letter) > 1:
-        match = re.search(r'\b([A-E])\b', model_letter)
-        if match:
-            model_letter = match.group(1)
     return model_letter == expected, f"expected={expected}, got={model_letter}"
 
 
@@ -299,6 +610,7 @@ def load_tasks():
             "benchmark": "arc",
             "description": f"{ex['question']}\n\nChoices: {choices}\n\nAnswer with just the letter (A, B, C, or D).",
             "expected": ex["answerKey"],
+            "labels": ex["choices"]["label"],
             "grader": "arc",
             "difficulty": "hard",
         })
@@ -501,7 +813,7 @@ def grade_task(task, model_answer):
     if grader == "gsm8k":
         return grade_gsm8k(model_answer, task["expected"])
     elif grader == "arc":
-        return grade_arc(model_answer, task["expected"])
+        return grade_arc(model_answer, task["expected"], labels=task.get("labels"))
     elif grader == "bbh":
         return grade_bbh(model_answer, task["expected"])
     elif grader == "bbh_arith":
@@ -515,7 +827,7 @@ def grade_task(task, model_answer):
     elif grader == "race":
         return grade_race(model_answer, task["expected"])
     elif grader == "gpqa":
-        return grade_arc(model_answer, task["expected"])
+        return grade_arc(model_answer, task["expected"], labels=task.get("labels"))
     elif grader == "aime":
         return grade_aime(model_answer, task["expected"])
     elif grader == "mmlu_pro":
@@ -546,6 +858,16 @@ def run_trial(task, arm, skill_prompt, trial_idx):
         system_prompt=system_prompt,
     )
     passed, detail = grade_task(task, result.final_answer)
+    # Truthful outcome capture (shared policy from runner_classic): the
+    # runner's failure class is preserved verbatim and can never grade
+    # into a pass; a token-limit-capped answer that fails grading is
+    # "truncated", not an ordinary wrong_answer. The grader itself is
+    # untouched and stays arm-agnostic.
+    passed, failure_class = grading_outcome(
+        getattr(result, "failure_class", "none"),
+        passed,
+        getattr(result, "finish_reason", ""),
+    )
 
     ref_counts = count_typed_refs(result.final_answer)
     verified_steps = ref_counts["verified_logical_steps"]
@@ -564,11 +886,15 @@ def run_trial(task, arm, skill_prompt, trial_idx):
         "total_tokens": result.total_tokens,
         "wall_seconds": result.wall_seconds,
         "passed": passed,
-        "failure_class": "none" if passed else "wrong_answer",
+        "failure_class": failure_class,
         "authoring_tokens": 0,
         "final_answer": result.final_answer,
         "quality_score": 1.0 if passed else 0.0,
         "grader_detail": detail,
+        # Preserve the runner's truthful trial outcome: finish reason,
+        # truncation, empty-response status, retry history/count and the
+        # complete first-request generation parameters.
+        **outcome_fields(result),
         "verified_logical_steps": verified_steps,
         "typed_refs_produced": typed_refs,
         "repeated_refs": repeated_refs,
@@ -618,6 +944,18 @@ def main():
                 "failure_class": "error",
                 "final_answer": f"ERROR: {e}",
                 "quality_score": 0.0,
+                "grader_detail": str(e),
+                "authoring_tokens": 0,
+                # Same truthful-outcome keys as run_trial, zeroed out: the
+                # schema of a serialized trial stays identical either way.
+                "finish_reason": "",
+                "truncated": False,
+                "cap_exhausted": False,
+                "output_token_cap": 0,
+                "empty_response": False,
+                "retries": 0,
+                "retry_history": [],
+                "request_params": {},
                 "verified_logical_steps": 0,
                 "typed_refs_produced": 0,
                 "repeated_refs": 0,
@@ -673,10 +1011,30 @@ def main():
             parts.append(f"{'--':>8s}")
     print(" | ".join(parts))
 
-    # Save
-    from outdir import make_run_dir
+    # Save into a fresh, exclusive run directory (never a fixed path at
+    # the results root) with a configuration/source manifest.
+    from outdir import make_run_dir, write_manifest
     results_dir = make_run_dir("public-bench")
-    results_dir.mkdir(parents=True, exist_ok=True)
+    write_manifest(
+        results_dir,
+        config={
+            "runner": "run_public_bench.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "arms": list(ARMS),
+            "trials_per_task": TRIALS_PER_TASK,
+            "max_turns": 1,
+            "max_tokens": 2048,
+            "timeout_seconds": 60,
+            "seed": SEED,
+            "benches": list(BENCHES),
+            "max_samples_per_bench": MAX_SAMPLES_PER_BENCH,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "runner_classic.py",
+            Path(__file__).parent / "metrics.py",
+        ],
+    )
     with open(results_dir / "public_benchmarks.json", "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)
 

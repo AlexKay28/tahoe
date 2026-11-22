@@ -25,7 +25,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from runner_classic import run as run_classic
+from runner_classic import (
+    grading_outcome,
+    outcome_fields,
+    run as run_classic,
+)
 from graders import make_grader
 from report import generate_markdown_table, generate_json_report, generate_per_task_comparison
 
@@ -87,6 +91,10 @@ def run_classic_arm(task, trial_idx):
         "failure_class": result.failure_class,
         "authoring_tokens": 0,
         "final_answer": result.final_answer,
+        # Preserve the runner's truthful trial outcome: finish reason,
+        # truncation, empty-response status, retry history/count and the
+        # complete first-request generation parameters.
+        **outcome_fields(result),
     }
 
 
@@ -125,6 +133,61 @@ def run_tahoe_arm(task, trial_idx):
         "failure_class": result.failure_class,
         "authoring_tokens": 0,
         "final_answer": result.final_answer,
+        # Same truthful-outcome fields as the classic arm: the serialized
+        # trial schema is identical for both arms.
+        **outcome_fields(result),
+    }
+
+
+def apply_grading(trial: dict, task: dict) -> dict:
+    """Grade a serialized arm trial in place, preserving truthful outcomes.
+
+    Same grader for both arms — no arm-dependent behavior. The labeling
+    policy comes from runner_classic.grading_outcome: a non-"none" runner
+    failure class is preserved verbatim (never relabeled wrong_answer)
+    and cannot be graded into a pass; a token-limit-capped answer that
+    fails grading is labeled "truncated" instead of ordinary
+    "wrong_answer" while a capped answer the grader accepts keeps its
+    pass verdict.
+    """
+    grader_passed, quality, detail = grade_trial(task, trial)
+    passed, failure_class = grading_outcome(
+        trial.get("failure_class", "none"),
+        grader_passed,
+        trial.get("finish_reason", ""),
+    )
+    trial["passed"] = passed
+    trial["quality_score"] = 1.0 if passed else 0.0
+    trial["failure_class"] = failure_class
+    trial["grader_detail"] = detail
+    return trial
+
+
+def runner_error_trial(task_id: str, arm: str, trial_idx: int, exc: BaseException) -> dict:
+    """JSON-safe serialized trial for a crashed runner — same schema as
+    successful arm trials, with the truthful outcome fields zeroed out."""
+    return {
+        "task_id": task_id,
+        "arm": arm,
+        "trial": trial_idx,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "wall_seconds": 0.0,
+        "passed": False,
+        "failure_class": "runner_error",
+        "authoring_tokens": 0,
+        "final_answer": f"ERROR: {exc}",
+        "quality_score": 0.0,
+        "grader_detail": str(exc),
+        "finish_reason": "",
+        "truncated": False,
+        "cap_exhausted": False,
+        "output_token_cap": 0,
+        "empty_response": False,
+        "retries": 0,
+        "retry_history": [],
+        "request_params": {},
     }
 
 
@@ -155,38 +218,43 @@ def main():
         print(f"  [{i+1}/{len(trial_plan)}] {task_id} / {arm} / trial {trial_idx} ...", end=" ", flush=True)
         try:
             result = ARM_RUNNERS[arm](task, trial_idx)
-            passed, quality, detail = grade_trial(task, result)
-            result["passed"] = passed
-            result["quality_score"] = quality
-            result["grader_detail"] = detail
+            apply_grading(result, task)
             all_trials.append(result)
-            print(f"passed={passed} tokens={result['total_tokens']} wall={result['wall_seconds']:.1f}s")
+            print(f"passed={result['passed']} tokens={result['total_tokens']} wall={result['wall_seconds']:.1f}s")
         except Exception as exc:
             print(f"ERROR: {exc}")
             traceback.print_exc()
-            all_trials.append({
-                "task_id": task_id,
-                "arm": arm,
-                "trial": trial_idx,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "wall_seconds": 0.0,
-                "passed": False,
-                "failure_class": "runner_error",
-                "authoring_tokens": 0,
-                "final_answer": f"ERROR: {exc}",
-                "quality_score": 0.0,
-                "grader_detail": str(exc),
-            })
+            all_trials.append(runner_error_trial(task_id, arm, trial_idx, exc))
 
     print("\n=== RESULTS ===\n")
     print(generate_markdown_table(all_trials))
     print()
     print(generate_per_task_comparison(all_trials))
 
-    results_dir = Path(__file__).parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    # Save into a fresh, exclusive run directory (never a fixed path at
+    # the results root) with a configuration/source manifest. The printed
+    # tables and the report generation stay exactly as before.
+    from outdir import make_run_dir, write_manifest
+    results_dir = make_run_dir("ablation-7tasks")
+    write_manifest(
+        results_dir,
+        config={
+            "runner": "run_trials.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "arms": ARMS,
+            "trials_per_arm": TRIALS_PER_ARM,
+            "max_turns": 1,
+            "max_tokens": 1024,
+            "timeout_seconds": 60,
+            "seed": SEED,
+            "task_files": list(TASK_FILES),
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "runner_classic.py",
+            Path(__file__).parent / "graders.py",
+        ],
+    )
     with open(results_dir / "trials.json", "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)
     with open(results_dir / "report.json", "w") as f:

@@ -368,6 +368,8 @@ def entry_refs(entry: PlanEntry) -> tuple[frozenset[str], frozenset[str]]:
         writes |= set(statement.retirements)
         if entry.condition is not None:
             reads |= condition_refs(entry.condition)
+        if entry.else_condition is not None:
+            reads |= condition_refs(entry.else_condition)
     return frozenset(writes), frozenset(reads)
 
 

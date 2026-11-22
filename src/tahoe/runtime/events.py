@@ -464,6 +464,14 @@ class EventStore:
 
             results: list[Event] = []
             succeeded_invocations: set[str] = self._succeeded_invocations(run_id)
+            failed_invocations: set[str] = {
+                row[0]
+                for row in self._conn.execute(
+                    "SELECT DISTINCT invocation_id FROM events"
+                    " WHERE run_id = ? AND event_type = ? AND invocation_id != ''",
+                    (run_id, EventType.FAILED.value),
+                ).fetchall()
+            }
 
             for record in records:
                 event_type = record.event_type
@@ -481,8 +489,17 @@ class EventStore:
                         f" expected {record.expected_state_version}, current {current_state_version}"
                     )
 
-                # duplicate SUCCEEDED terminal check
+                # Terminal transitions are one-way: a FAILED invocation can
+                # never later be rewritten as SUCCEEDED, and SUCCEEDED is
+                # unique per invocation (including earlier records in this
+                # batch).
                 if event_type is EventType.SUCCEEDED and record.invocation_id:
+                    if record.invocation_id in failed_invocations:
+                        raise StateVersionConflict(
+                            f"invocation {record.invocation_id!r} in run {run_id!r}"
+                            " already has a FAILED terminal event; cannot append"
+                            " SUCCEEDED"
+                        )
                     if record.invocation_id in succeeded_invocations:
                         raise StateVersionConflict(
                             f"invocation {record.invocation_id!r} in run {run_id!r}"
@@ -805,7 +822,19 @@ class EventStore:
         if not _TASK_LEDGER_AVAILABLE:
             raise RuntimeError("TaskLedger is not available")
         if allow_concurrent is None:
-            return self._task_ledger_cached(run_id)
+            # Single-writer guard (issue #21): the cache-aware replay
+            # shares the sqlite connection with in-flight append_batch
+            # transactions and mutates the succeeded/ledger caches, so
+            # it must hold the store lock like every other store
+            # access.  An unlocked reader — a ledger read on one PAR
+            # branch thread racing a sibling branch's commit —
+            # interleaves with the batch's transaction and its cache
+            # invalidation: torn row reads, and stale cache entries
+            # whose max-seq water mark skips committed task rows, so
+            # later replays drop them ("unknown task: task-1" child
+            # run failures).
+            with self._lock:
+                return self._task_ledger_cached(run_id)
         with self._lock:
             rows = self._conn.execute(
                 "SELECT payload FROM events"

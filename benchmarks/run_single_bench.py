@@ -208,7 +208,10 @@ def worker_fn(args):
                 "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
                 "wall_seconds": 0.0, "passed": False, "failure_class": "error",
                 "final_answer": f"ERROR: {e}", "quality_score": 0.0,
-                "grader_detail": str(e),
+                "grader_detail": str(e), "authoring_tokens": 0,
+                "finish_reason": "", "truncated": False, "cap_exhausted": False,
+                "output_token_cap": 0, "empty_response": False,
+                "retries": 0, "retry_history": [], "request_params": {},
                 "verified_logical_steps": 0, "typed_refs_produced": 0,
                 "repeated_refs": 0, "retired_refs": 0, "total_refs_produced": 0,
             }
@@ -219,7 +222,10 @@ def worker_fn(args):
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         "wall_seconds": 0.0, "passed": False, "failure_class": "error",
         "final_answer": "ERROR: rate limited after retries", "quality_score": 0.0,
-        "grader_detail": "rate limited after retries",
+        "grader_detail": "rate limited after retries", "authoring_tokens": 0,
+        "finish_reason": "", "truncated": False, "cap_exhausted": False,
+        "output_token_cap": 0, "empty_response": False,
+        "retries": 0, "retry_history": [], "request_params": {},
         "verified_logical_steps": 0, "typed_refs_produced": 0,
         "repeated_refs": 0, "retired_refs": 0, "total_refs_produced": 0,
     }
@@ -291,8 +297,26 @@ def main():
     print(f"  Token savings: {100*(1-to/co):.0f}%" if co > 0 else "")
 
     # Save
-    from outdir import make_run_dir
+    from outdir import make_run_dir, write_manifest
     out_dir = make_run_dir(f"single-{bench_name}")
+    write_manifest(
+        out_dir,
+        config={
+            "runner": "run_single_bench.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "benchmark": bench_name,
+            "n_samples": n_samples,
+            "arms": list(ARMS),
+            "trials_per_task": TRIALS_PER_TASK,
+            "n_workers": N_WORKERS,
+            "seed": SEED,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "run_public_bench.py",
+            Path(__file__).parent / "runner_classic.py",
+        ],
+    )
     out_file = out_dir / "trials.json"
     with open(out_file, "w") as f:
         json.dump(all_trials, f, indent=2, sort_keys=True)
