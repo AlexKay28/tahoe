@@ -1,5 +1,17 @@
 # The Three-Stage Arc: Teaching Models a Specialized Reasoning Language
 
+> **Evidence correction (2026-11-18):** Stage 1 measured the TAHOE-93 prompt
+> bundle, including its answer-only contract—not typed-ref/runtime execution.
+> Output-token ratios were 0.511× (GLM) and 0.682× (gpt-oss), but total-token
+> ratios were 0.931× and 1.011×. The current-grader derived regrade
+> (`benchmarks/results/derived/2026-11-18-stage1-full-v3/`) supersedes the
+> stored grades: overall +0.49pp / −0.19pp (not themselves tested; no
+> equivalence margin supports a parity claim), with GSM8K significantly
+> favoring tahoe on both models and RACE favoring classic on gpt-oss. Stage 1
+> demonstrates portable output compression, not a proof of the language
+> mechanism or a frontier win. See `docs/EVALUATION.md`; the
+> structure-isolating factorial is prepared but has not been run.
+
 > The thesis of the next paper: "How to teach a model to reason in a
 > specialized language for token consumption reduction."
 > Dated 2026-09-14.
@@ -10,8 +22,12 @@
 Stage 1: TEACH BY PROMPT       (DONE — 63,348 trials, 2 models)
   93-token system prompt teaches the language (typed refs, protocols)
   Evidence: −49% tokens (GLM-5.3-Flash), −32% (gpt-oss-120b);
-  quality +1.9% / −0.2%; HM wins on both models
-  Deliverable: benchmarks/results/CROSS_MODEL_EVAL.md
+  quality +1.9% / −0.2% (stored grades, superseded by the 2026-11-18
+  derived regrade: +0.49pp / −0.19pp overall, not themselves tested;
+  per-benchmark Holm: GSM8K tahoe-higher on both models, RACE
+  classic-higher on gpt-oss); the "HM wins" claim is retracted
+  Deliverable: benchmarks/results/2026-09-13-stage1-full/CROSS_MODEL_EVAL.md (stored) and
+  benchmarks/results/derived/2026-11-18-stage1-full-v3/ (derived evidence)
 
 Stage 2: PRACTICE BY EXECUTION (TAHOE-VM — in progress)
   Model compiles task → program.think, then EXECUTES it on itself:
@@ -46,11 +62,12 @@ Stage 3: INTERNALIZE BY RL     (planned)
 
 ## The unique asset across all three stages
 
-**Machine-verified process rewards for free.** OpenAI's Let's Verify Step by
-Step needed 800,000 human labels (PRM800K) for step-level supervision. TAHOE's
-DONE predicates, parse validation, and typecheck produce equivalent signal
-computationally — every step either passes its predicate or doesn't. This is
-the single most defensible novelty of the program.
+**Machine-checkable process signals.** OpenAI's Let's Verify Step by Step used
+human labels (PRM800K) for step-level supervision. TAHOE's DONE predicates,
+parse validation, and typecheck provide computational signals without those
+labels, but predicate/type conformance is not equivalent to human semantic
+verification of reasoning. Their value as RL rewards remains an empirical
+question; no RL result is claimed here.
 
 ## Positioning line
 

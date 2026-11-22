@@ -1,0 +1,22 @@
+{
+  "generated_at_utc": "2026-11-18T15:27:39+00:00",
+  "grader_source": "benchmarks/run_public_bench.py",
+  "grader_source_sha256": "5153620db7c0632d5c094315c4fe76e2592cae762f5b8371a8836b00ae3190b3",
+  "grader_version": "grade_gsm8k-numeric-v4",
+  "input": "/home/alexkay28/tahoe/benchmarks/results/2026-09-13-stage1-full/oss_full_eval.json",
+  "input_sha256": "771be2ee59da30df186df2c73d64931fbf32c7d772f6a5afe313bbb58160eff9",
+  "output": "/home/alexkay28/tahoe/benchmarks/results/derived/2026-11-18-stage1-gsm8k-v4/oss-gsm8k-derived.json",
+  "python_version": "3.12.3",
+  "schema": "tahoe/gsm8k-derived-results-run/1",
+  "summary": {
+    "grader_errors": 12,
+    "gsm8k_trials": 7914,
+    "passed": 7431,
+    "skipped_non_gsm8k": 23910,
+    "verdict_changes": {
+      "fail_to_pass": 1247,
+      "pass_to_fail": 40
+    },
+    "wrong_answer": 471
+  }
+}

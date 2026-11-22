@@ -26,7 +26,7 @@ from tahoe.budgets import BudgetDeadlineExceeded, BudgetGate
 from tahoe.runtime import finalize as _finalize
 from tahoe.runtime import planning as _planning
 from tahoe.runtime.events import EventType, _Record
-from tahoe.runtime.tasks import TaskStatus
+from tahoe.runtime.tasks import TaskLedgerError, TaskStatus
 from tahoe.state import StateDelta
 from tahoe.syntax import is_typed_reference
 from tahoe.syntax.model import Call, Program, Return, Stop, Loop, Invocation, Try, Conditional
@@ -501,40 +501,23 @@ class DriveEngine:
                         task_id = self._create_single_plan_task(run_id, entry)
                         statement_to_task[idx] = task_id
                 else:
-                    # else-branch terminal (STOP/RETURN): execute directly
-                    for s in program.statements:
-                        if isinstance(s, Conditional) and s.else_branch is not None:
-                            for es in s.else_branch:
-                                if es is entry.invocation or (
-                                    not isinstance(es, Invocation) and es is not None
-                                ):
-                                    pass
-                    # Find the matching else-branch terminal statement
-                    for cond_stmt in program.statements:
-                        if (
-                            isinstance(cond_stmt, Conditional)
-                            and cond_stmt.else_branch is not None
-                        ):
-                            for es in cond_stmt.else_branch:
-                                if not isinstance(es, Invocation):
-                                    if isinstance(es, Stop):
-                                        self._cancel_pending_after(
-                                            run_id, plan,
-                                            statement_to_task, idx,
-                                        )
-                                        return self._terminal_stop(
-                                            run_id, es, values
-                                        )
-                                    if isinstance(es, Return):
-                                        self._cancel_pending_after(
-                                            run_id, plan,
-                                            statement_to_task, idx,
-                                        )
-                                        return self._terminal_return(
-                                            run_id, es.refs, values
-                                        )
-                    idx += 1
-                    continue
+                    # Unreachable by construction (guard): build_plan
+                    # creates else_condition plan entries only for
+                    # else-branch DO invocations — else-branch terminals
+                    # are _ElseAnchor conditionals evaluated by
+                    # _run_conditionals, never plan entries.  A planner
+                    # change that ever produced an else-condition entry
+                    # without an invocation must fail loudly here: the
+                    # pre-fix code scanned every conditional's else
+                    # branch and executed the first terminal it found,
+                    # silently attaching the WRONG conditional's
+                    # terminal in a multi-conditional program.
+                    raise ValueError(
+                        f"plan entry {idx} carries an else_condition"
+                        " without an invocation; else-branch terminals"
+                        " must remain anchors handled by"
+                        " _run_conditionals, not plan entries"
+                    )
             else:
                 task_id = statement_to_task[idx]
 
@@ -1322,41 +1305,58 @@ class DriveEngine:
         loop = entry.loop
         assert loop is not None
 
-        # Check ENTRY condition
-        try:
-            entry_holds = evaluate_condition(loop.entry_condition, values)
-        except ValueError as exc:
-            return self._fail_run(
-                run_id, plan, statement_to_task, idx, str(exc)
-            )
-        if not entry_holds:
+        loop_events = [
+            event for event in self.store.events(run_id)
+            if event.invocation_id == invocation_id
+        ]
+        started_events = [
+            event for event in loop_events
+            if event.event_type is EventType.LOOP_STARTED
+        ]
+        if started_events:
+            # ENTRY belongs to the initial transition, not resume.  Body
+            # commits may have made it false; committed loop work still
+            # owns the continuation.
+            entry_holds = bool(started_events[-1].payload.get("entry"))
+        else:
+            try:
+                entry_holds = evaluate_condition(loop.entry_condition, values)
+            except ValueError as exc:
+                return self._fail_run(
+                    run_id, plan, statement_to_task, idx, str(exc)
+                )
             self.store.append(
                 run_id,
                 EventType.LOOP_STARTED,
                 invocation_id=invocation_id,
-                payload={"name": loop.name, "entry": False},
+                payload=(
+                    {"name": loop.name, "entry": True, "max": loop.max_iterations}
+                    if entry_holds
+                    else {"name": loop.name, "entry": False}
+                ),
             )
+        if not entry_holds:
             return None
 
-        self.store.append(
-            run_id,
-            EventType.LOOP_STARTED,
-            invocation_id=invocation_id,
-            payload={"name": loop.name, "entry": True, "max": loop.max_iterations},
-        )
-
+        recorded_iterations = {
+            event.payload.get("iteration")
+            for event in loop_events
+            if event.event_type is EventType.LOOP_ITERATION
+            and isinstance(event.payload, dict)
+        }
         prev_progress: float | None = None
         for iteration in range(1, loop.max_iterations + 1):
-            self.store.append(
-                run_id,
-                EventType.LOOP_ITERATION,
-                invocation_id=invocation_id,
-                payload={
-                    "name": loop.name,
-                    "iteration": iteration,
-                    "max": loop.max_iterations,
-                },
-            )
+            if iteration not in recorded_iterations:
+                self.store.append(
+                    run_id,
+                    EventType.LOOP_ITERATION,
+                    invocation_id=invocation_id,
+                    payload={
+                        "name": loop.name,
+                        "iteration": iteration,
+                        "max": loop.max_iterations,
+                    },
+                )
 
             # Check WHILE condition
             try:
@@ -1554,42 +1554,68 @@ class DriveEngine:
             invocation_id = f"{loop_invocation_id}.iter{iteration}.{body_stmt.step_id}"
             instruction_id = body_stmt.step_id
 
-            ledger = self.store.task_ledger(run_id)
-            task = ledger.create_task(
-                text=f"{body_stmt.step_id}: DO {body_stmt.command}"
-                f" [LOOP iteration {iteration}]",
-                creator="coordinator",
+            prior_events = [
+                event for event in self.store.events(run_id)
+                if event.invocation_id == invocation_id
+            ]
+            if any(
+                event.event_type is EventType.SUCCEEDED
+                for event in prior_events
+            ):
+                # Its delta is already present in the replayed values.
+                return None
+            prior_types = {event.event_type for event in prior_events}
+            prior_ready = next(
+                (
+                    event for event in reversed(prior_events)
+                    if event.event_type is EventType.INVOCATION_READY
+                ),
+                None,
             )
-            task_id = task.id
-
-            self.store.append_batch(run_id, [
-                _Record(
-                    event_type=EventType.TASK_UPDATED,
-                    task_id=task_id,
-                    payload={
-                        "kind": "task_created", "id": task_id,
-                        "text": task.text,
-                        "priority": task.priority, "parent": task.parent,
-                        "dependencies": task.dependencies,
-                        "creator": task.creator,
-                    },
-                    store=self.store,
-                ),
-                _Record(
-                    event_type=EventType.TASK_UPDATED,
-                    task_id=task_id,
-                    payload={"kind": "task_started", "id": task_id},
-                    store=self.store,
-                ),
-                _Record(
-                    event_type=EventType.INVOCATION_READY,
-                    instruction_id=instruction_id,
-                    invocation_id=invocation_id,
-                    task_id=task_id,
-                    payload={"command": body_stmt.command},
-                    store=self.store,
-                ),
-            ])
+            ledger = self.store.task_ledger(run_id)
+            if prior_ready is None:
+                task = ledger.create_task(
+                    text=f"{body_stmt.step_id}: DO {body_stmt.command}"
+                    f" [LOOP iteration {iteration}]",
+                    creator="coordinator",
+                )
+                task_id = task.id
+                self.store.append_batch(run_id, [
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={
+                            "kind": "task_created", "id": task_id,
+                            "text": task.text,
+                            "priority": task.priority, "parent": task.parent,
+                            "dependencies": task.dependencies,
+                            "creator": task.creator,
+                        },
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.TASK_UPDATED,
+                        task_id=task_id,
+                        payload={"kind": "task_started", "id": task_id},
+                        store=self.store,
+                    ),
+                    _Record(
+                        event_type=EventType.INVOCATION_READY,
+                        instruction_id=instruction_id,
+                        invocation_id=invocation_id,
+                        task_id=task_id,
+                        payload={"command": body_stmt.command},
+                        store=self.store,
+                    ),
+                ])
+            else:
+                task_id = prior_ready.task_id
+                task = ledger.tasks.get(task_id)
+                if task is None or task.status is not TaskStatus.IN_PROGRESS:
+                    raise TaskLedgerError(
+                        f"LOOP body task {task_id} for {invocation_id} is not"
+                        " IN_PROGRESS; cannot resume"
+                    )
 
             # Resolve arguments
             try:
@@ -1628,17 +1654,18 @@ class DriveEngine:
             ):
                 resolved_kwargs["_workspace_root"] = dispatch_root
 
-            self.store.append(
-                run_id,
-                EventType.INVOCATION_DISPATCHED,
-                instruction_id=instruction_id,
-                invocation_id=invocation_id,
-                task_id=task_id,
-                payload={
-                    "args": resolved_kwargs,
-                    "idempotency_key": f"{run_id}:{invocation_id}",
-                },
-            )
+            if EventType.INVOCATION_DISPATCHED not in prior_types:
+                self.store.append(
+                    run_id,
+                    EventType.INVOCATION_DISPATCHED,
+                    instruction_id=instruction_id,
+                    invocation_id=invocation_id,
+                    task_id=task_id,
+                    payload={
+                        "args": resolved_kwargs,
+                        "idempotency_key": f"{run_id}:{invocation_id}",
+                    },
+                )
 
             try:
                 result = self._execute_worker_call(
@@ -1671,6 +1698,9 @@ class DriveEngine:
                 )
                 self.store.append_batch(run_id, records)
                 return {"run_id": run_id, "status": "failed", "error": validation_error, "outputs": {}}
+
+            if crash_hook is not None:
+                crash_hook(0)
 
             self.store.append(
                 run_id,
@@ -2530,11 +2560,14 @@ class DriveEngine:
         events = self.store.events(run_id)
         matched_selector: int | None = None
         matched_event = None
-        for selector_idx, selector in enumerate(first.selectors):
-            selector_name = selector.split("(")[0].strip()
-            for event in events:
-                event_type_name = event.event_type.value
-                if event_type_name == selector_name or event_type_name.startswith(selector_name + "."):
+        for event in events:
+            event_type_name = event.event_type.value
+            for selector_idx, selector in enumerate(first.selectors):
+                selector_name = selector.split("(")[0].strip()
+                if (
+                    event_type_name == selector_name
+                    or event_type_name.startswith(selector_name + ".")
+                ):
                     matched_selector = selector_idx
                     matched_event = event
                     break
@@ -3109,9 +3142,16 @@ class DriveEngine:
                 call.protocol if call is not None else statement.step_id
             )
             invocation_id = f"inv-{idx + 1}"
-            if entry.condition is not None:
+            if entry.condition is not None or entry.else_condition is not None:
+                condition = (
+                    entry.condition
+                    if entry.condition is not None
+                    else entry.else_condition
+                )
                 try:
-                    fired = evaluate_condition(entry.condition, values)
+                    fired = evaluate_condition(condition, values)
+                    if entry.else_condition is not None:
+                        fired = not fired
                 except ValueError as exc:
                     records = cancel_all_unsettled()
                     records.append(_Record(
@@ -3489,6 +3529,10 @@ class DriveEngine:
 
             # Issue #41: feed the budget gate's token accumulator from
             # the result receipt if the worker carries usage info.
+            # Issue #85: also accumulate cost from receipt.usage.cost —
+            # the concurrent frontier must enforce the same terminal
+            # semantics as the sequential and scatter paths (no silent
+            # overspend success).
             if gate is not None and isinstance(result, dict):
                 receipt = result.get("_receipt")
                 if isinstance(receipt, dict):
@@ -3497,10 +3541,18 @@ class DriveEngine:
                         tokens = usage.get("tokens", 0)
                         if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
                             gate.add_tokens(tokens)
+                        cost = usage.get("cost")
+                        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
+                            gate.add_cost(cost)
                 if gate.token_cap_exceeded():
                     return finish_failed_invocation(
                         idx, statement.step_id, invocation_id, task_id,
                         "token budget exceeded",
+                    )
+                if gate.cost_cap_exceeded():
+                    return finish_failed_invocation(
+                        idx, statement.step_id, invocation_id, task_id,
+                        "cost budget exceeded",
                     )
 
             # Issue #85: post-result token ceiling check (concurrent path).
@@ -3541,6 +3593,30 @@ class DriveEngine:
                         idx, statement.step_id, invocation_id,
                         task_id, "output_too_large",
                     )
+
+            # Issue #85: post-result per-invocation cost ceiling check —
+            # if the receipt's cost exceeded the command's max_cost,
+            # fail (concurrent path parity with the sequential loop).
+            cmd_max_cost = _command_max_cost(statement.command)
+            if (
+                cmd_max_cost is not None
+                and cmd_max_cost > 0
+                and isinstance(result, dict)
+            ):
+                receipt = result.get("_receipt")
+                if isinstance(receipt, dict):
+                    usage = receipt.get("usage")
+                    if isinstance(usage, dict):
+                        cost = usage.get("cost")
+                        if (
+                            isinstance(cost, (int, float))
+                            and not isinstance(cost, bool)
+                            and cost > cmd_max_cost
+                        ):
+                            return finish_failed_invocation(
+                                idx, statement.step_id, invocation_id,
+                                task_id, "cost_exceeded",
+                            )
 
             target_values, validation_error = map_results_to_targets(
                 statement.targets, result

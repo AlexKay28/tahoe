@@ -620,25 +620,28 @@ history = ∅
 
 ### 3.1 Subtyping Lattice
 
-The node types form a subtyping lattice under the relation ⊑ (read "is a subtype of"). The lattice captures epistemic strength: a stronger type can be used where a weaker type is expected, because it carries more epistemic warrant.
+The node types form a partial order under ⊑ (read "is a subtype of", i.e. *is safely substitutable for*): τ ⊑ σ holds exactly when a τ value may be supplied where a σ value is declared — because τ carries at least the epistemic warrant (or commitment) that the σ slot consumes.
+
+Draft 0.1 of this section read ⊑ as "upward means stronger evidence," placed G at the bottom and V at the top, and thereby derived G ⊑ Q ⊑ A ⊑ E ⊑ F ⊑ V and G ⊑ C ⊑ PF ⊑ O ⊑ D ⊑ V: any goal could implicitly stand in for evidence, a fact, or a verification, and any hypothesis for a decision. That conflated two different relations:
+
+- **Substitutability (⊑)**: a *stronger* value safely fills a *weaker* slot. This is the only relation the type system derives.
+- **Promotion**: warrant is never gained through the type system — converting an existing node to a higher-warrant type is command work (`verify` commits V, `estimate` commits F, `choose` commits D, `hypothesize` commits H). High-warrant nodes may also be introduced by explicit INPUT declarations or child adoption; §3.4's corollary scopes this precisely.
+
+Under substitutability, the warrant chain points the other way: a V (verified) result is a subtype of F (fact), and F is a subtype of E (evidence). The order is a forest of five disjoint chains — there is no global top or bottom, and no derivation crosses a chain:
 
 ```
-                    V (verified — top)
-                   / \
-                  F   D
-                 / \ / \
-                E   H   O
-               / \ / \ /
-              A   U   PF (preference)
-               \ / \ /
-                Q   C
-                 \ /
-                  G (goal — bottom)
+ warrant         posit           openness         commitment     preference
+
+  E (evidence)   H (hypothesis)  U (unknown)      O (option)     PF (preference)
+  ⊑              ⊑               ⊑                ⊑              ⊑
+  F (fact)       A (assumption)  Q (question)     D (decision)   C (constraint)
+  ⊑                              ⊑
+  V (verified)                   G (goal)
 ```
 
-**Reading the lattice.** The upward direction means "stronger evidence." G (goal) is the bottom: any node can be framed as a goal. V (verified) is the top: a verified result can stand in for any weaker epistemic type.
+**Reading the chains.** Each arrow is one axiom of §3.2 read bottom-up: the subtype (below) may fill a slot expecting its supertype (above). A verified result may fill a fact or evidence slot (V ⊑ F ⊑ E); an assumption may fill a hypothesis slot (A ⊑ H); a goal may fill a question or unknown slot (G ⊑ Q ⊑ U); a decision may fill an option slot (D ⊑ O); a constraint may fill a preference slot (C ⊑ PF). There is no reading under which a goal, assumption, or hypothesis becomes evidence, a fact, or a verification, and none under which a decision and a verification substitute for each other.
 
-Additional types are orthogonal to the main lattice:
+Types outside these five chains are orthogonal to ⊑:
 
 | Type | Role | Relation to lattice |
 | --- | --- | --- |
@@ -652,61 +655,54 @@ Additional types are orthogonal to the main lattice:
 
 ### 3.2 Subtyping Rules
 
-The subtyping relation ⊑ is the reflexive-transitive closure of the following axioms:
+The subtyping relation ⊑ is the reflexive-transitive closure of exactly these seven axioms:
 
 ```
-G ⊑ Q      (a goal is a special kind of question)
-G ⊑ C      (a goal can serve as a constraint)
-Q ⊑ U      (a question is a special kind of unknown)
-Q ⊑ A      (a question can be treated as an assumption)
+V ⊑ F      (a verified result is a fact: it carries its verification)
+F ⊑ E      (a fact is usable as evidence: evidence is the least-warranted claim slot)
+A ⊑ H      (an assumption is a posit taken as granted; it fills a hypothesis slot)
+G ⊑ Q      (a goal is a question of the form "how to achieve X?")
+Q ⊑ U      (a question is a specific known unknown)
 C ⊑ PF     (a constraint is a strict preference)
-PF ⊑ O     (a preference can be an option)
-U ⊑ H      (an unknown can be hypothesized)
-A ⊑ H      (an assumption is a weaker hypothesis)
-A ⊑ E      (an assumption can serve as evidence)
-E ⊑ F      (evidence can be promoted to a fact)
-H ⊑ F      (a confirmed hypothesis becomes a fact)
-H ⊑ D      (a hypothesis can drive a decision)
-O ⊑ D      (an option can be selected as a decision)
-F ⊑ V      (a fact can be verified)
-D ⊑ V      (a decision can be verified)
+D ⊑ O      (a decision commits to one specific option, so it fills an option slot)
 ```
 
-> **Implementation note.** The implemented `SUBLATTICE` in
-> `src/tahoe/typecheck.py:32-40` encodes the following edges:
-> `E→F`, `F→V`, `A→H`, `H→F`, `U→Q`, `Q→G`, `C→G`. The code treats `PF`,
-> `O`, `D`, and `P` as **orthogonal** types (not in the main lattice),
-> while the document's axioms include `C⊑PF`, `PF⊑O`, `O⊑D`, `H⊑D`,
-> `D⊑V`. This is a known reconciliation gap: the document describes the
-> full design lattice; the code implements the core epistemic chain
-> (G→Q→U→A→H→E→F→V plus C→G) and defers the preference/decision/option
-> branch. The `is_subtype` function is correct for the implemented
-> edges; the remaining axioms are design-level specifications for future
-> type-checker extensions.
+The closure adds exactly two derivations: V ⊑ E (a verified result is usable as evidence) and G ⊑ U (a goal marks a known unknown).
 
-```
-G ⊑ Q      (a goal is a special kind of question)
-G ⊑ C      (a goal can serve as a constraint)
-Q ⊑ U      (a question is a special kind of unknown)
-Q ⊑ A      (a question can be treated as an assumption)
-C ⊑ PF     (a constraint is a strict preference)
-PF ⊑ O     (a preference can be an option)
-U ⊑ H      (an unknown can be hypothesized)
-A ⊑ H      (an assumption is a weaker hypothesis)
-A ⊑ E      (an assumption can serve as evidence)
-E ⊑ F      (evidence can be promoted to a fact)
-H ⊑ F      (a confirmed hypothesis becomes a fact)
-H ⊑ D      (a hypothesis can drive a decision)
-O ⊑ D      (an option can be selected as a decision)
-F ⊑ V      (a fact can be verified)
-D ⊑ V      (a decision can be verified)
-```
+Every axiom is a *safe substitution*, never a warrant change: in each pair the subtype carries at least the warrant or commitment the supertype slot consumes, and filling the slot does not inflate the value's epistemic status. The reverse of each axiom was checked and rejected as a nonsensical role substitution — blanket-reversing the draft-0.1 chains would have made a question a goal, an option a preference, and a hypothesis an assumption, which are role confusions, not substitutions.
+
+**Promotion is not subtyping.** The following draft-0.1 edges are removed by design; each promotion now requires an explicit command:
+
+| Promotion | Removed edge | Performed by |
+| --- | --- | --- |
+| goal framed as constraint | G ⊑ C | define (node_schema) |
+| question assumed | Q ⊑ A | an assumption-authoring step |
+| unknown hypothesized | U ⊑ H | hypothesize |
+| hypothesis confirmed as fact | H ⊑ F | confirm/verify |
+| hypothesis drives a decision | H ⊑ D | choose |
+| option selected | O ⊑ D | choose |
+| fact verified | F ⊑ V | verify |
+| evidence promoted to fact | E ⊑ F | estimate (commits estimate:F) |
+| decision verified | D ⊑ V | verify |
+
+**Mandated non-derivations** (enforced by `tests/test_typecheck.py`):
+
+- Assumptions, goals, and hypotheses never implicitly become evidence, facts, or verification: A ⋢ E, A ⋢ F, A ⋢ V; G ⋢ E, G ⋢ F, G ⋢ V, G ⋢ H; H ⋢ E, H ⋢ F, H ⋢ V, H ⋢ D.
+- Warrant is never gained silently: E ⋢ F, E ⋢ V, F ⋢ V.
+- D and V are incomparable: D ⋢ V and V ⋢ D — a decision is a commitment and a verification is a test; neither subsumes the other.
+- The chains are disjoint: no ⊑ edge crosses families (for example PF ⋢ O and O ⋢ PF).
 
 Key incompatibilities (not comparable under ⊑):
 
 - **D and V are incomparable**: a decision and a verification have different epistemic roles. A decision is a commitment; a verification is a test. Neither subsumes the other.
 - **E and D are incomparable**: evidence does not imply a decision, and a decision does not imply evidence.
+- **Any two chains are incomparable**: substituting across role families (an option where a preference is expected, a hypothesis where evidence is expected) is a role confusion, not a substitution.
 - **CTX and any lattice type**: context is background, not a claim, so it cannot substitute for an epistemic node.
+
+> **Implementation note.** `SUBLATTICE` and `LATTICE_AXIOMS` in
+> `src/tahoe/typecheck.py` encode exactly the seven axioms above, and
+> `is_subtype` computes their reflexive-transitive closure
+> (`is_subtype(t1, t2)` is True iff t1 can fill a t2 slot).
 
 ### 3.3 Typing Judgments
 
@@ -725,9 +721,9 @@ Each command contract (ADR-0002 §Atomic Command Contract) declares:
 
 The type checker verifies:
 
-1. **Input compatibility**: all input refs have types compatible with the contract's accepted types, by subtyping. If the contract expects F (fact) and the ref has type V (verified), this is valid because V ⊑ F.
-2. **Output assignment**: output refs are assigned types from the contract's produced types.
-3. **DONE predicate well-typedness**: DONE predicates reference refs of compatible types. A DONE over a V ref can test any property that a DONE over an F ref can, because V ⊑ F.
+1. **Input compatibility**: each typed argument's actual node type must be a subtype of the contract's accepted type for that argument (actual ⊑ accepted); a compound accepted type like `Q/U` is a union — the actual type must be a subtype of *some* member. If the contract expects F (fact) and the ref has type V (verified), this is valid because V ⊑ F. If the contract expects E (evidence) and the ref has type G (goal), this is rejected because G ⋢ E: a goal must never implicitly become evidence.
+2. **Output assignment**: the contract's outputs pair *positionally* with the invocation's targets — target i is filled by declared output i, and targets beyond the declared outputs carry no contract type. Each pair is checked produced-to-target: the produced type must be a subtype of the target ref's declared type (produced ⊑ target), never the reverse. A compound output like `G/C/P/K/OUT` is a union that is never collapsed to its first member: the pair passes when *some* member is a subtype of the target's type. `estimate` produces `estimate:F`, so `-> F.est` and `-> E.est` are valid (F ⊑ E) but `-> V.est` is rejected (F ⋢ V: verification is command work, not subtyping).
+3. **DONE predicate well-typedness**: a DONE predicate references refs of compatible types — the ref must be one of the invocation's own targets or a previously committed ref, and it must carry a lattice type (not an orthogonal one): DONE tests epistemic properties, not artifacts or context. A DONE over a V ref can test any property that a DONE over an F ref can, because V ⊑ F; a DONE over a PR ref is rejected.
 
 ### 3.4 Type Safety (Sketch)
 
@@ -780,6 +776,10 @@ The only divergence is worker non-determinism, which does not block progress —
 - RETURN/STOP: no state change.
 
 Therefore, the type of the committed state is preserved across all transitions.
+
+**Corollary (No implicit promotion).** Neither a transition rule nor a subtyping derivation promotes a node's warrant. The removed draft-0.1 edges of §3.2 (G⊑C, Q⊑A, U⊑H, A⊑E, H⊑F, H⊑D, O⊑D, F⊑V, E⊑F, D⊑V) are not derivations, so a goal, assumption, hypothesis, or piece of evidence is never silently *treated as* a constraint, assumption, hypothesis, fact, decision, or verification. When a higher-warrant value substitutes, it only ever fills a *weaker* slot (V may fill an F or E slot; F may fill an E slot) — the reverse never occurs, so a committed fact, verification, or decision keeps its identity, and consuming a node never raises its warrant.
+
+The guarantee scopes implicit promotion *through the type system*, not the origin of high-warrant values: a fact, verification, or decision may legitimately enter the committed state through an explicit PROGRAM INPUT declaration (which asserts the node's type directly) or through child adoption (CALL-ADOPT and BARRIER-COMMIT adopt nodes typed by the child's own contract), without command work. What is excluded is precisely the implicit conversion: changing an existing node's epistemic standing requires an explicit command whose contract produces the promoted type (`estimate` commits F, `verify` commits V, `choose` commits D).
 
 ---
 

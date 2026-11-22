@@ -1,0 +1,1 @@
+Output only the answer. Math: number. Choice: (C). Text: one sentence.

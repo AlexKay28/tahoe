@@ -358,6 +358,7 @@ class ScatterEngine:
 
         candidate_values: dict[int, dict[str, Any]] = {}
         loser_errors: dict[int, str] = {}
+        cancelled_losers = self._candidate_cancel_reasons(run_id, candidate_tasks)
         winner: int | None = None
         is_kofn = gather.mode.startswith("k:") or gather.mode.startswith("quorum:")
         for k in range(1, count + 1):
@@ -367,6 +368,13 @@ class ScatterEngine:
                     # Deterministic first-success rule (issue #27): the
                     # lowest candidate index with a committed success.
                     winner = k
+                continue
+            if k in cancelled_losers:
+                prefix = f"[candidate {k}] "
+                reason = cancelled_losers[k]
+                loser_errors[k] = (
+                    reason[len(prefix):] if reason.startswith(prefix) else reason
+                )
                 continue
             if gather.mode == "any" and winner is not None:
                 records: list[_Record] = []
@@ -406,8 +414,14 @@ class ScatterEngine:
                         self.store.append_batch(run_id, records)
                     break
                 continue
-            # Candidate failure.
-            if gather.mode in ("all", "ranked"):
+            # Budget exhaustion is run-fatal, including under USING any or
+            # k-of-n: another candidate must not turn an exhausted run into
+            # a success.  Ordinary candidate failures remain mode-specific.
+            if gather.mode in ("all", "ranked") or payload_outcome in {
+                "insufficient_token_budget",
+                "token budget exceeded",
+                "cost budget exceeded",
+            }:
                 return self._fail_scatter_candidate(
                     run_id=run_id,
                     plan=plan,
@@ -668,6 +682,20 @@ class ScatterEngine:
         except Exception as exc:
             return ("failed", str(exc), None)
 
+        # Match plain dispatch: reserve enough total token headroom for the
+        # command's declared per-invocation ceiling before starting work.
+        from tahoe.runtime.helpers import _command_max_tokens
+        cmd_max_tokens = _command_max_tokens(body.command)
+        if (
+            gate is not None
+            and cmd_max_tokens is not None
+            and cmd_max_tokens > 0
+            and gate.budget.max_total_tokens is not None
+        ):
+            remaining = gate.remaining_tokens(gate.budget.max_total_tokens)
+            if not gate.check_token_budget(cmd_max_tokens, remaining):
+                return ("failed", "insufficient_token_budget", None)
+
         # Issue #23: the candidate is a branch — its effectful dispatch
         # writes into its isolated workspace subdirectory and holds the
         # candidate's exclusive workspace claim for the handler's
@@ -740,8 +768,17 @@ class ScatterEngine:
                     tokens = usage.get("tokens", 0)
                     if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
                         gate.add_tokens(tokens)
+                    cost = usage.get("cost")
+                    if (
+                        isinstance(cost, (int, float))
+                        and not isinstance(cost, bool)
+                        and cost > 0
+                    ):
+                        gate.add_cost(cost)
             if gate.token_cap_exceeded():
                 return ("failed", "token budget exceeded", None)
+            if gate.cost_cap_exceeded():
+                return ("failed", "cost budget exceeded", None)
 
         target_values, validation_error = map_results_to_targets(
             body.targets, result
@@ -1390,6 +1427,10 @@ class ScatterEngine:
 
         else:  # ranked
             judge = gather.judge
+            if count == 0:
+                return fail_gather(
+                    "GATHER USING ranked: no candidates to rank"
+                )
             if judge is None:
                 return fail_gather(
                     "GATHER USING ranked requires a JUDGE step"

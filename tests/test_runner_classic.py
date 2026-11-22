@@ -1,8 +1,15 @@
-"""Tests for benchmarks/runner_classic.py, the classic inference arm (A1)."""
+"""Tests for benchmarks/runner_classic.py, the classic inference arm (A1).
+
+All API-facing tests run against a fake ``openai`` module — no model
+evaluations are launched. The result-capture tests verify that finish
+reasons, API failure classes, empty responses, retry history and request
+generation parameters are preserved truthfully in ``ClassicResult``.
+"""
 
 import dataclasses
 import importlib.util
 import inspect
+import json
 import os
 import sys
 import types
@@ -36,10 +43,15 @@ ClassicResult = runner_classic.ClassicResult
 run = runner_classic.run
 
 
-def _response(content=None, tool_calls=None, prompt_tokens=10, completion_tokens=5):
+def _response(
+    content=None, tool_calls=None, prompt_tokens=10, completion_tokens=5, finish_reason=None
+):
     message = SimpleNamespace(content=content, tool_calls=tool_calls)
     usage = SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
-    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason=finish_reason)],
+        usage=usage,
+    )
 
 
 def _tool_call(call_id="call_1", name="lookup", arguments='{"q": "x"}'):
@@ -90,6 +102,8 @@ def _install_client_factory(fake_openai, steps):
 def test_classic_result_dataclass_has_expected_fields():
     assert dataclasses.is_dataclass(ClassicResult)
     names = [field.name for field in dataclasses.fields(ClassicResult)]
+    # The first ten fields are the historical shape, in order; the new
+    # truthful-capture fields are appended after them.
     assert names == [
         "task_id",
         "arm",
@@ -101,12 +115,22 @@ def test_classic_result_dataclass_has_expected_fields():
         "failure_class",
         "turns",
         "final_answer",
+        "finish_reason",
+        "empty_response",
+        "retries",
+        "retry_history",
+        "request_params",
     ]
     result = ClassicResult(task_id="task-1")
     assert result.arm == "classic"
     assert result.failure_class == "none"
     assert result.final_answer == ""
     assert result.passed is False
+    assert result.finish_reason == ""
+    assert result.empty_response is False
+    assert result.retries == 0
+    assert result.retry_history == []
+    assert result.request_params == {}
 
 
 def test_runner_module_is_importable():
@@ -156,6 +180,8 @@ def test_run_signature_matches_spec():
     assert params["max_tokens"].default == 4096
     assert params["timeout_seconds"].default == 120
     assert params["tools"].default is None
+    assert params["max_retries"].default == 2
+    assert params["retry_backoff_seconds"].default == 0.5
 
 
 def test_missing_api_key_raises_value_error():
@@ -168,7 +194,7 @@ def test_single_turn_immediate_answer():
     fake_openai = _fake_openai_module()
     created = _install_client_factory(
         fake_openai,
-        [_response(content="42", prompt_tokens=11, completion_tokens=7)],
+        [_response(content="42", prompt_tokens=11, completion_tokens=7, finish_reason="stop")],
     )
     with mock.patch.dict(sys.modules, {"openai": fake_openai}):
         result = run(
@@ -200,6 +226,13 @@ def test_single_turn_immediate_answer():
     assert calls[0]["max_tokens"] == 4096
     assert calls[0]["messages"] == [{"role": "user", "content": "What is the answer?"}]
     assert "tools" not in calls[0]
+    # Truthful outcome capture: clean stop, no retries, and the recorded
+    # request parameters match the API call that was actually made.
+    assert result.finish_reason == "stop"
+    assert result.empty_response is False
+    assert result.retries == 0
+    assert result.retry_history == []
+    assert result.request_params == calls[0]
 
 
 def test_tool_call_then_answer_two_turns():
@@ -211,8 +244,9 @@ def test_tool_call_then_answer_two_turns():
                 tool_calls=[_tool_call(name="lookup", arguments='{"q": "x"}')],
                 prompt_tokens=10,
                 completion_tokens=4,
+                finish_reason="tool_calls",
             ),
-            _response(content="done", prompt_tokens=12, completion_tokens=6),
+            _response(content="done", prompt_tokens=12, completion_tokens=6, finish_reason="stop"),
         ],
     )
     tool_schema = [
@@ -252,13 +286,27 @@ def test_tool_call_then_answer_two_turns():
         "name": "lookup",
         "content": "result:x",
     }
+    # The recorded finish reason is the final response's ("stop"), not the
+    # intermediate tool-call turn's, and the request snapshot still shows
+    # the initial one-message request even though the live conversation
+    # grew to three messages.
+    assert result.finish_reason == "stop"
+    assert result.empty_response is False
+    assert result.retries == 0
+    assert result.request_params["messages"] == [
+        {"role": "user", "content": "use the lookup tool"}
+    ]
+    assert len(second_messages) == 3
 
 
 def test_max_turns_exceeded_fails():
     fake_openai = _fake_openai_module()
     created = _install_client_factory(
         fake_openai,
-        [_response(tool_calls=[_tool_call(name="spin", arguments="{}")]) for _ in range(3)],
+        [
+            _response(tool_calls=[_tool_call(name="spin", arguments="{}")], finish_reason="tool_calls")
+            for _ in range(3)
+        ],
     )
     with mock.patch.dict(sys.modules, {"openai": fake_openai}):
         result = run(
@@ -276,27 +324,229 @@ def test_max_turns_exceeded_fails():
     assert result.output_tokens == 15
     assert result.total_tokens == 45
     assert len(created[0].chat.completions.calls) == 3
+    # Truthfully capped while the model was still calling tools: the last
+    # response's finish reason is preserved, not silently relabeled.
+    assert result.finish_reason == "tool_calls"
+    assert result.empty_response is False
+    assert result.retries == 0
 
 
 def test_api_error_is_reported():
     fake_openai = _fake_openai_module()
     _install_client_factory(fake_openai, [fake_openai.APIError("boom")])
     with mock.patch.dict(sys.modules, {"openai": fake_openai}):
-        result = run("task-4", "hello", api_key="test-key")
+        result = run("task-4", "hello", api_key="test-key", max_retries=0)
     assert result.passed is False
     assert result.failure_class == "api_error"
     assert result.turns == 0
     assert result.final_answer == ""
+    assert result.finish_reason == ""
+    assert result.retries == 1
+    assert result.retry_history == [
+        {
+            "turn": 0,
+            "attempt": 1,
+            "failure_class": "api_error",
+            "error": "APIError: boom",
+        }
+    ]
 
 
 def test_timeout_error_is_reported():
     fake_openai = _fake_openai_module()
     _install_client_factory(fake_openai, [fake_openai.APITimeoutError("too slow")])
     with mock.patch.dict(sys.modules, {"openai": fake_openai}):
-        result = run("task-5", "hello", api_key="test-key")
+        result = run("task-5", "hello", api_key="test-key", max_retries=0)
     assert result.passed is False
     assert result.failure_class == "timeout"
     assert result.turns == 0
+    assert result.retry_history[0]["failure_class"] == "timeout"
+
+
+def test_api_error_after_retries_is_reported_with_history():
+    fake_openai = _fake_openai_module()
+    created = _install_client_factory(
+        fake_openai,
+        [
+            fake_openai.APIError("boom 1"),
+            fake_openai.APIError("boom 2"),
+            fake_openai.APIError("boom 3"),
+        ],
+    )
+    with mock.patch.dict(sys.modules, {"openai": fake_openai}):
+        result = run(
+            "task-retry-fail",
+            "hello",
+            api_key="test-key",
+            retry_backoff_seconds=0.0,
+        )
+    # One initial attempt plus two retries (the default max_retries=2),
+    # then a truthful api_error outcome with the full retry history.
+    assert result.passed is False
+    assert result.failure_class == "api_error"
+    assert result.turns == 0
+    assert result.final_answer == ""
+    assert result.finish_reason == ""
+    assert result.retries == 3
+    assert result.retry_history == [
+        {
+            "turn": 0,
+            "attempt": 1,
+            "failure_class": "api_error",
+            "error": "APIError: boom 1",
+        },
+        {
+            "turn": 0,
+            "attempt": 2,
+            "failure_class": "api_error",
+            "error": "APIError: boom 2",
+        },
+        {
+            "turn": 0,
+            "attempt": 3,
+            "failure_class": "api_error",
+            "error": "APIError: boom 3",
+        },
+    ]
+    assert len(created[0].chat.completions.calls) == 3
+
+
+def test_api_error_recovers_after_retry():
+    fake_openai = _fake_openai_module()
+    created = _install_client_factory(
+        fake_openai,
+        [
+            fake_openai.APIError("transient"),
+            _response(content="ok", finish_reason="stop"),
+        ],
+    )
+    with mock.patch.dict(sys.modules, {"openai": fake_openai}):
+        result = run(
+            "task-retry-ok",
+            "hello",
+            api_key="test-key",
+            retry_backoff_seconds=0.0,
+        )
+    # The transient failure was retried successfully: the run passes with
+    # a clean failure_class, and the retry history keeps the failure.
+    assert result.passed is True
+    assert result.failure_class == "none"
+    assert result.turns == 1
+    assert result.final_answer == "ok"
+    assert result.finish_reason == "stop"
+    assert result.retries == 1
+    assert result.retry_history[0]["failure_class"] == "api_error"
+    assert len(created[0].chat.completions.calls) == 2
+
+
+def test_length_capped_empty_answer_is_empty_response_not_wrong_answer():
+    fake_openai = _fake_openai_module()
+    _install_client_factory(
+        fake_openai,
+        # The model spent its whole token budget before emitting any
+        # answer text; the API reports a length cap.
+        [_response(content=None, finish_reason="length", completion_tokens=4096)],
+    )
+    with mock.patch.dict(sys.modules, {"openai": fake_openai}):
+        result = run(
+            "task-capped",
+            "a very long problem",
+            api_key="test-key",
+            max_tokens=4096,
+        )
+    # Truthful capture: the outcome is an empty response under a length
+    # cap — never silently relabeled as a wrong answer here.
+    assert result.passed is False
+    assert result.failure_class == "empty_response"
+    assert result.failure_class != "wrong_answer"
+    assert result.finish_reason == "length"
+    assert result.empty_response is True
+    assert result.final_answer == ""
+    assert result.output_tokens == 4096
+    assert result.turns == 1
+
+
+def test_empty_answer_with_clean_stop_is_distinguishable_from_capped():
+    fake_openai = _fake_openai_module()
+    _install_client_factory(
+        fake_openai,
+        [_response(content="   ", finish_reason="stop")],
+    )
+    with mock.patch.dict(sys.modules, {"openai": fake_openai}):
+        result = run("task-empty", "hello", api_key="test-key")
+    # Whitespace-only content counts as an empty response, but the clean
+    # "stop" finish reason keeps it distinguishable from the length-capped
+    # empty outcome above.
+    assert result.passed is False
+    assert result.failure_class == "empty_response"
+    assert result.empty_response is True
+    assert result.finish_reason == "stop"
+
+
+def test_length_capped_nonempty_answer_is_passed_with_finish_reason():
+    fake_openai = _fake_openai_module()
+    _install_client_factory(
+        fake_openai,
+        [_response(content="the truncated ans", finish_reason="length")],
+    )
+    with mock.patch.dict(sys.modules, {"openai": fake_openai}):
+        result = run("task-truncated", "hello", api_key="test-key")
+    # A capped but non-empty answer is still a real answer: the runner
+    # records the length cap and leaves grading to downstream consumers.
+    assert result.passed is True
+    assert result.failure_class == "none"
+    assert result.empty_response is False
+    assert result.finish_reason == "length"
+    assert result.final_answer == "the truncated ans"
+
+
+def test_generation_metadata_is_recorded_in_request_params():
+    fake_openai = _fake_openai_module()
+    created = _install_client_factory(
+        fake_openai,
+        [_response(content="meta", finish_reason="stop")],
+    )
+    tool_schema = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+            },
+        }
+    ]
+    extra_body = {"temperature": 0.2, "top_p": 0.9}
+    with mock.patch.dict(sys.modules, {"openai": fake_openai}):
+        result = run(
+            "task-meta",
+            "hello",
+            model="custom-model",
+            api_key="test-key",
+            max_tokens=512,
+            tools=tool_schema,
+            system_prompt="be terse",
+            extra_body=extra_body,
+        )
+    calls = created[0].chat.completions.calls
+    assert len(calls) == 1
+    expected_params = {
+        "model": "custom-model",
+        "messages": [
+            {"role": "system", "content": "be terse"},
+            {"role": "user", "content": "hello"},
+        ],
+        "max_tokens": 512,
+        "tools": tool_schema,
+        "extra_body": extra_body,
+    }
+    # The complete generation parameters of the first request are
+    # preserved on the result and match the API call exactly.
+    assert result.request_params == expected_params
+    assert result.request_params == calls[0]
+    # Downstream consumers dump trial results as JSON; the captured
+    # metadata and retry history must stay serializable.
+    assert json.dumps(result.request_params) == json.dumps(expected_params)
+    assert json.dumps(result.retry_history) == "[]"
 
 
 def test_env_fallback_for_api_key_and_base():

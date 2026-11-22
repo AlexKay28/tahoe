@@ -11,6 +11,7 @@ A grader is a callable that receives ``(result, expected_state)`` and returns
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 
 __all__ = [
@@ -151,27 +152,180 @@ class CompositeGrader:
                 raise ValueError(f"invalid sub-grader spec: {spec!r}")
 
 
+# Separator-aware number token: thousands groups ('1,430', '1 430', thin
+# space), optional decimals, optional leading minus.
+_SEP_NUM = r"-?\d{1,3}(?:[,\u202f ]\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?"
+
+
+def _normalize_number_text(text) -> str:
+    """Normalize LaTeX/formatting artifacts so separator matching works."""
+    return (
+        str(text)
+        .replace("\\,", "")
+        .replace("\\ ", "")
+        .replace("\u202f", " ")
+        .replace("$", "")
+    )
+
+
+def _clean_number(token: str) -> str:
+    """Strip separators from a matched number token ('1,430' -> '1430')."""
+    return token.replace(",", "").replace("\u202f", "").replace(" ", "")
+
+
+def _to_float(value):
+    s = _clean_number(str(value))
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _numbers_equal(a, b, rel_tol: float = 1e-9) -> bool:
+    """Numeric equality with tolerance; 42 == 42.00 == '42,000'/16000-style."""
+    fa, fb = _to_float(a), _to_float(b)
+    if fa is not None and fb is not None:
+        return abs(fa - fb) <= rel_tol * max(1.0, abs(fa), abs(fb))
+    return str(a).strip() == str(b).strip()
+
+
 class NumericGrader:
-    """Extracts the first number from the answer and compares to expected.
+    """Extracts the model's FINAL answer number and compares it to ``value``.
 
-    Handles markdown tables, sentences, JSON wrappers, and TAHOE metadata.
+    The grader never passes merely because the expected number occurs
+    somewhere in the result (regression: an 8-subtask plan answer used to
+    pass because the digit '5' appeared in the numbered list). Exactly one
+    number is extracted as the final answer and compared numerically, so
+    42 == 42.00 and '16,000' == 16000.
+
+    Task-specific extraction (any of these ``expected_state`` keys takes
+    priority over the generic chain, so a manifest can pin exactly where
+    the answer lives instead of relying on universal last-number behavior):
+
+    - ``field``: read this key from a JSON-object result;
+    - ``label``: match a ``Label: N`` / ``Label is N`` declaration
+      (e.g. ``label: "Number of subtasks"``);
+    - ``pattern``: task-supplied regex; the LAST match wins and capture
+      group 1 (or the whole match) is the number.
+
+    Generic chain when no task-specific source matches, in priority order:
+
+    1. ``#### N`` official marker;
+    2. ``\\boxed{...}`` (LaTeX thousands separators ``43{,}200`` handled);
+    3. single-key JSON object (``{"subtask_count": 5}``);
+    4. last bold span containing a number (``**Count: 3**``);
+    5. last ``answer/result/total/count/number is|=: N`` declaration;
+    6. last number on the last non-empty line.
     """
-
-    def __init__(self):
-        import re
-        self._re = re.compile(r"(?<!\d)(\d+)(?!\d)")
 
     def __call__(self, result, expected_state: dict) -> tuple[bool, str]:
         expected = expected_state.get("value")
         if expected is None:
             return False, "expected_state is missing 'value'"
         text = result if isinstance(result, str) else str(result)
-        numbers = self._re.findall(text)
-        if not numbers:
-            return False, f"no number found in result: {text[:100]!r}"
-        if str(expected) in numbers:
-            return True, f"found expected number {expected}"
-        return False, f"expected {expected}, found numbers: {numbers}"
+        try:
+            number, method = self._extract(result, text, expected_state)
+        except re.error as exc:
+            return False, f"invalid expected_state['pattern']: {exc}"
+        if number is None:
+            return False, (
+                f"no final-answer number found in result "
+                f"(nearest source: {method}): {text[:100]!r}"
+            )
+        if _numbers_equal(number, expected):
+            return True, (
+                f"final answer {number} (via {method}) matches expected {expected}"
+            )
+        return False, f"expected {expected}, final answer was {number} (via {method})"
+
+    def _extract(self, result, text: str, state: dict):
+        field = state.get("field")
+        label = state.get("label")
+        pattern = state.get("pattern")
+
+        # Task-specific structured sources first.
+        data = None
+        if isinstance(result, dict):
+            data = result
+        else:
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                data = parsed
+        if data is not None:
+            if field is not None:
+                if field in data:
+                    number = self._number_from_value(data[field])
+                    if number is not None:
+                        return number, f"JSON field {field!r}"
+            elif len(data) == 1:
+                number = self._number_from_value(next(iter(data.values())))
+                if number is not None:
+                    return number, "single-key JSON object"
+        if label is not None:
+            m = re.search(
+                rf"{re.escape(str(label))}\s*(?:is|=|:)\s*({_SEP_NUM})",
+                text,
+                re.I,
+            )
+            if m:
+                return _clean_number(m.group(1)), f"label {label!r}"
+        if pattern is not None:
+            matches = list(re.finditer(pattern, text))
+            if matches:
+                m = matches[-1]
+                group = m.group(1) if m.groups() else m.group(0)
+                number = self._number_from_value(group)
+                if number is not None:
+                    return number, f"pattern {pattern!r}"
+
+        # Generic final-answer chain.
+        m = re.search(rf"####\s*\$?\s*({_SEP_NUM})", text)
+        if m:
+            return _clean_number(m.group(1)), "'####' marker"
+        m = re.search(r"\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}", text)
+        if m:
+            inner = (
+                m.group(1)
+                .replace("{,}", ",")
+                .replace("\\,", "")
+                .replace("\\ ", "")
+            )
+            nums = re.findall(_SEP_NUM, inner)
+            if nums:
+                return _clean_number(nums[-1]), "'\\boxed{}'"
+        norm = _normalize_number_text(text)
+        for span in reversed(re.findall(r"\*\*([^*]+)\*\*", norm)):
+            nums = re.findall(_SEP_NUM, span)
+            if nums:
+                return _clean_number(nums[-1]), "bold span"
+        ms = re.findall(
+            rf"(?:answer|result|total|count|number)\s*(?:is|=|:)\s*({_SEP_NUM})",
+            norm,
+            re.I,
+        )
+        if ms:
+            return _clean_number(ms[-1]), "answer declaration"
+        lines = [line for line in norm.splitlines() if line.strip()]
+        if lines:
+            nums = re.findall(_SEP_NUM, lines[-1])
+            if nums:
+                return _clean_number(nums[-1]), "last line"
+        return None, "no final-answer marker"
+
+    @staticmethod
+    def _number_from_value(value):
+        """Extract the last number from a JSON field value or scalar."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return str(value)
+        nums = re.findall(_SEP_NUM, _normalize_number_text(value))
+        if nums:
+            return _clean_number(nums[-1])
+        return None
 
 
 _GRADER_TYPES = {

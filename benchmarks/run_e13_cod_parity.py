@@ -131,6 +131,18 @@ def main():
                 "failure_class": "error",
                 "final_answer": f"ERROR: {e}",
                 "quality_score": 0.0,
+                "grader_detail": str(e),
+                "authoring_tokens": 0,
+                # Same truthful-outcome keys as run_public_bench.run_trial,
+                # zeroed out: the serialized trial schema stays identical.
+                "finish_reason": "",
+                "truncated": False,
+                "cap_exhausted": False,
+                "output_token_cap": 0,
+                "empty_response": False,
+                "retries": 0,
+                "retry_history": [],
+                "request_params": {},
                 "verified_logical_steps": 0,
                 "typed_refs_produced": 0,
                 "repeated_refs": 0,
@@ -216,9 +228,26 @@ def main():
         else:
             print("  -> TAHOE underperforms CoD (lower correctness)")
 
-    # Save
-    results_dir = Path(__file__).parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    # Save into a fresh, exclusive run directory (never a fixed path at
+    # the results root) with a configuration/source manifest.
+    from outdir import make_run_dir, write_manifest
+    results_dir = make_run_dir("e13-cod-parity")
+    write_manifest(
+        results_dir,
+        config={
+            "runner": "run_e13_cod_parity.py",
+            "model": os.environ.get("TAHOE_MODEL", "."),
+            "arms": list(ARMS),
+            "trials_per_task": E13_TRIALS_PER_TASK,
+            "samples_per_benchmark": E13_MAX_SAMPLES_PER_BENCH,
+            "seed": SEED,
+        },
+        source_files=[
+            __file__,
+            Path(__file__).parent / "run_public_bench.py",
+            Path(__file__).parent / "runner_classic.py",
+        ],
+    )
     output = {
         "experiment": "E13_chain_of_draft_parity",
         "arms": ARMS,

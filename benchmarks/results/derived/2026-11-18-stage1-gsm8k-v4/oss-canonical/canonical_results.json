@@ -1,0 +1,314 @@
+{
+  "benchmarks": {
+    "gsm8k": {
+      "arms": {
+        "classic": {
+          "macro_accuracy": 0.931261056355825,
+          "micro_accuracy": 0.9312610563558251,
+          "outcomes": {
+            "cap_exhausted": {
+              "count": 0,
+              "rate": 0.0
+            },
+            "completed_response": {
+              "accuracy": 0.9326752720830169,
+              "count": 3951,
+              "rate": 0.9984836997725549
+            },
+            "empty_response": {
+              "count": 6,
+              "rate": 0.001516300227445034
+            },
+            "truncated": {
+              "count": 0,
+              "rate": 0.0
+            }
+          },
+          "successes": 3685,
+          "tasks": 1319,
+          "token_sums": {
+            "input_tokens": 504360,
+            "output_tokens": 1261097,
+            "total_tokens": 1765457
+          },
+          "total_spend_per_success": 479.09280868385343,
+          "trials": 3957
+        },
+        "tahoe": {
+          "macro_accuracy": 0.9466767753348497,
+          "micro_accuracy": 0.9466767753348496,
+          "outcomes": {
+            "cap_exhausted": {
+              "count": 0,
+              "rate": 0.0
+            },
+            "completed_response": {
+              "accuracy": 0.9469160768452983,
+              "count": 3956,
+              "rate": 0.9997472832954258
+            },
+            "empty_response": {
+              "count": 1,
+              "rate": 0.00025271670457417233
+            },
+            "truncated": {
+              "count": 0,
+              "rate": 0.0
+            }
+          },
+          "successes": 3746,
+          "tasks": 1319,
+          "token_sums": {
+            "input_tokens": 864447,
+            "output_tokens": 509083,
+            "total_tokens": 1373530
+          },
+          "total_spend_per_success": 366.6657768286172,
+          "trials": 3957
+        }
+      },
+      "classic_vs_tahoe": {
+        "macro_accuracy_difference_tahoe_minus_classic": 0.015415718979024717,
+        "micro_accuracy_difference_tahoe_minus_classic": 0.015415718979024495,
+        "token_ratio_tahoe_over_classic": {
+          "input_tokens": 1.7139483702117535,
+          "output_tokens": 0.4036826667575928,
+          "total_tokens": 0.7780025228595202
+        },
+        "token_sums": {
+          "classic": {
+            "input_tokens": 504360,
+            "output_tokens": 1261097,
+            "total_tokens": 1765457
+          },
+          "tahoe": {
+            "input_tokens": 864447,
+            "output_tokens": 509083,
+            "total_tokens": 1373530
+          }
+        },
+        "total_spend_per_success": {
+          "classic": 479.09280868385343,
+          "tahoe": 366.6657768286172
+        }
+      },
+      "task_set_sha256": "ca2a3f8cb793961b93fd76620ffe8ef1ee2c2ee2216d07f9a180c9d6d152accd"
+    }
+  },
+  "estimands": {
+    "macro_accuracy": "Task-equal-weighted (macro) accuracy: the mean over tasks of each task's trial-mean pass rate; every task weighs the same regardless of how many trials it has.",
+    "micro_accuracy": "Trial-pooled (micro) accuracy within a benchmark/arm: successes / trials. Tasks with more repeated trials weigh proportionally more.",
+    "outcomes": "Truncation / cap-exhausted / empty / completed counts derived only from fields actually present on each trial (explicit flags, finish_reason, recorded output caps, final_answer); finish_reason is never fabricated for archives that do not record it.",
+    "paired_comparisons": "Keyed task-cluster paired comparisons on exact (benchmark, task_id, trial) identity; repeated matched trials are averaged within tasks; Holm step-down correction over the comparison family.",
+    "token_ratio_tahoe_over_classic": "tahoe token spend / classic token spend for the same scope; null when the classic spend is zero.",
+    "token_sums": "Exact sums of recorded input/output/total token counts over all trials in scope.",
+    "total_spend_per_success": "sum(total_tokens over ALL attempts, failures included) / number of successes; null (undefined) when there are zero successes."
+  },
+  "multiplicity": {
+    "corrected_fields": [
+      "permutation_p_holm",
+      "pass_rate_permutation_p_holm",
+      "z_test.p_value_holm",
+      "wilcoxon.p_value_holm"
+    ],
+    "family": "comparisons",
+    "method": "holm"
+  },
+  "overall": {
+    "arms": {
+      "classic": {
+        "macro_accuracy": 0.931261056355825,
+        "micro_accuracy": 0.9312610563558251,
+        "outcomes": {
+          "cap_exhausted": {
+            "count": 0,
+            "rate": 0.0
+          },
+          "completed_response": {
+            "accuracy": 0.9326752720830169,
+            "count": 3951,
+            "rate": 0.9984836997725549
+          },
+          "empty_response": {
+            "count": 6,
+            "rate": 0.001516300227445034
+          },
+          "truncated": {
+            "count": 0,
+            "rate": 0.0
+          }
+        },
+        "successes": 3685,
+        "tasks": 1319,
+        "token_sums": {
+          "input_tokens": 504360,
+          "output_tokens": 1261097,
+          "total_tokens": 1765457
+        },
+        "total_spend_per_success": 479.09280868385343,
+        "trials": 3957
+      },
+      "tahoe": {
+        "macro_accuracy": 0.9466767753348497,
+        "micro_accuracy": 0.9466767753348496,
+        "outcomes": {
+          "cap_exhausted": {
+            "count": 0,
+            "rate": 0.0
+          },
+          "completed_response": {
+            "accuracy": 0.9469160768452983,
+            "count": 3956,
+            "rate": 0.9997472832954258
+          },
+          "empty_response": {
+            "count": 1,
+            "rate": 0.00025271670457417233
+          },
+          "truncated": {
+            "count": 0,
+            "rate": 0.0
+          }
+        },
+        "successes": 3746,
+        "tasks": 1319,
+        "token_sums": {
+          "input_tokens": 864447,
+          "output_tokens": 509083,
+          "total_tokens": 1373530
+        },
+        "total_spend_per_success": 366.6657768286172,
+        "trials": 3957
+      }
+    },
+    "classic_vs_tahoe": {
+      "macro_accuracy_difference_tahoe_minus_classic": 0.015415718979024717,
+      "micro_accuracy_difference_tahoe_minus_classic": 0.015415718979024495,
+      "token_ratio_tahoe_over_classic": {
+        "input_tokens": 1.7139483702117535,
+        "output_tokens": 0.4036826667575928,
+        "total_tokens": 0.7780025228595202
+      },
+      "token_sums": {
+        "classic": {
+          "input_tokens": 504360,
+          "output_tokens": 1261097,
+          "total_tokens": 1765457
+        },
+        "tahoe": {
+          "input_tokens": 864447,
+          "output_tokens": 509083,
+          "total_tokens": 1373530
+        }
+      },
+      "total_spend_per_success": {
+        "classic": 479.09280868385343,
+        "tahoe": 366.6657768286172
+      }
+    }
+  },
+  "paired_comparisons": {
+    "gsm8k/classic_vs_tahoe": {
+      "arm_a": "classic",
+      "arm_b": "tahoe",
+      "cohens_h": 0.06452079868026406,
+      "mean_token_difference": 99.04649987364165,
+      "mean_token_difference_ci": [
+        92.82410917361638,
+        105.35481425322214
+      ],
+      "n_a": 3957,
+      "n_b": 3957,
+      "n_pairs": 3957,
+      "n_tasks": 1319,
+      "n_unmatched_a": 0,
+      "n_unmatched_b": 0,
+      "pairing_key": [
+        "benchmark",
+        "task_id",
+        "trial"
+      ],
+      "pass_rate_a": 0.931261056355825,
+      "pass_rate_b": 0.9466767753348497,
+      "pass_rate_difference": -0.015415718979024516,
+      "pass_rate_difference_ci": [
+        -0.023755370229972202,
+        -0.007328784432650999
+      ],
+      "pass_rate_permutation_p": 0.00029997000299970003,
+      "pass_rate_permutation_p_holm": 0.00029997000299970003,
+      "permutation_p": 9.999000099990002e-05,
+      "permutation_p_holm": 9.999000099990002e-05,
+      "wilcoxon": {
+        "n": 1313,
+        "p_value": 0.0,
+        "p_value_holm": 0.0,
+        "w_stat": 37983.5,
+        "z_stat": -28.622682944324033
+      },
+      "z_test": {
+        "method": "paired_task_mean_z",
+        "n": 1319,
+        "p_value": 0.00023091673349084907,
+        "p_value_holm": 0.00023091673349084907,
+        "z_stat": -3.6825453935404866
+      }
+    }
+  },
+  "provenance": {
+    "include_raw_trials": false,
+    "inputs": [
+      {
+        "benchmark_default": "oss-gsm8k-derived",
+        "benchmarks": [
+          "gsm8k"
+        ],
+        "manifest": {
+          "available_metadata_keys": [
+            "manifest"
+          ],
+          "top_level": {
+            "manifest": {
+              "grader": {
+                "name": "grade_gsm8k",
+                "sha256": "5153620db7c0632d5c094315c4fe76e2592cae762f5b8371a8836b00ae3190b3",
+                "source": "benchmarks/run_public_bench.py"
+              },
+              "grader_version": "grade_gsm8k-numeric-v4",
+              "regrader_version": "2",
+              "schema": "tahoe/gsm8k-derived-results/1",
+              "source_archive_sha256": "771be2ee59da30df186df2c73d64931fbf32c7d772f6a5afe313bbb58160eff9",
+              "summary": {
+                "grader_errors": 12,
+                "gsm8k_trials": 7914,
+                "passed": 7431,
+                "skipped_non_gsm8k": 23910,
+                "verdict_changes": {
+                  "fail_to_pass": 1247,
+                  "pass_to_fail": 40
+                },
+                "wrong_answer": 471
+              }
+            }
+          },
+          "trial_metadata": {}
+        },
+        "path": "benchmarks/results/derived/2026-11-18-stage1-gsm8k-v4/oss-gsm8k-derived.json",
+        "sha256": "b18b2819b2909cb5f955f6b008421861ef8c735d5239505345e7e74441b1ed64",
+        "task_set_sha256": "ca2a3f8cb793961b93fd76620ffe8ef1ee2c2ee2216d07f9a180c9d6d152accd",
+        "trial_count": 7914,
+        "trial_counts_by_arm": {
+          "classic": 3957,
+          "tahoe": 3957
+        }
+      }
+    ],
+    "stats": {
+      "n_permutations": 10000,
+      "n_resamples": 10000,
+      "seed": 42
+    },
+    "total_trials": 7914
+  },
+  "schema": "canonical-results/1"
+}

@@ -206,7 +206,11 @@ class TestCrashWindows:
             payload={"program": "resume_demo", "version": "1.0"},
         )
         worker = make_worker()
-        result = resume_run(store, worker, "run-w0a", program)
+        # The hand-crafted RUN_STARTED carries no seal_digest (legacy
+        # crash window), so resuming it needs the explicit unsafe opt-in.
+        result = resume_run(
+            store, worker, "run-w0a", program, allow_unsealed_legacy=True
+        )
         assert result["status"] == "succeeded"
         assert worker.calls == {"define": 1, "calculate": 1, "report": 1}
         assert_completed_run_invariants(store, "run-w0a")

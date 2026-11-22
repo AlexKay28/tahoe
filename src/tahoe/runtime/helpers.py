@@ -12,8 +12,11 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from tahoe.syntax import is_typed_reference, parse_condition
 from tahoe.syntax.model import (
+    Approve,
+    Await,
     Call,
     Conditional,
+    First,
     Gather,
     Invocation,
     Loop,
@@ -241,6 +244,40 @@ def _uses_reformulate(program: "Program") -> bool:
         isinstance(statement, Reformulate)
         for statement in program.statements
     )
+
+
+def _uses_first(program: "Program") -> bool:
+    """Whether the program contains FIRST blocks (issue #76).
+
+    FIRST blocks drive the sequential plan loop: their entry owns the
+    event-wait + earliest-match semantics and a nested body executed
+    inline (the concurrent frontier's dependency DAG has no refs for a
+    FIRST entry — reaching it crashes).  The requested width is
+    recorded in metadata but does not switch the frontier on, exactly
+    like scatter/PAR/delegate programs.
+    """
+    return any(isinstance(statement, First) for statement in program.statements)
+
+
+def _uses_await(program: "Program") -> bool:
+    """Whether the program contains AWAIT statements (issue #77).
+
+    AWAIT suspends the run at its plan position (sequential semantics);
+    like FIRST it is a positional entry the concurrent frontier cannot
+    schedule, so an AWAIT program drives the sequential plan loop.
+    """
+    return any(isinstance(statement, Await) for statement in program.statements)
+
+
+def _uses_approve(program: "Program") -> bool:
+    """Whether the program contains APPROVE statements (issue #78).
+
+    APPROVE blocks the run at its plan position until a human grant or
+    denial (sequential semantics); the concurrent frontier cannot
+    schedule the entry, so an APPROVE program drives the sequential
+    plan loop.
+    """
+    return any(isinstance(statement, Approve) for statement in program.statements)
 
 
 from tahoe.runtime.planning import map_results_to_targets

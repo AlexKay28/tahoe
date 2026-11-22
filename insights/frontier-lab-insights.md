@@ -1,5 +1,11 @@
 # Frontier Lab Insights (Anthropic / OpenAI)
 
+> **Evidence correction (2026-11-18):** the cross-model observation is output
+> compression (0.511× GLM, 0.682× gpt-oss), not total-spend compression
+> (0.931× and 1.011× respectively) or evidence for a particular internal
+> substitution mechanism. The prompt's answer-only contract remains a
+> confound. The mechanism interpretation below is therefore a hypothesis.
+
 > Public engineering research from frontier labs that validates or sharpens
 > TAHOE-VM. Dated 2026-09-14.
 

@@ -506,6 +506,16 @@ def test_resume_reexecutes_claimed_invocation(tmp_path):
         handout = bridge.ready()
         assert handout["ready"] is True  # claimed, never submitted
 
+        # The driver-started run records the canonical program seal
+        # like a coordinator-driven run, so it resumes safely by
+        # default — no allow_unsealed_legacy opt-in.
+        started = next(
+            event
+            for event in store.events("r1")
+            if event.event_type is EventType.RUN_STARTED
+        )
+        assert started.payload["seal_digest"] == seal_digest(program)
+
         result = resume_run(
             store,
             DeterministicWorker({
@@ -524,7 +534,10 @@ def test_resume_reexecutes_claimed_invocation(tmp_path):
             event.event_type is EventType.INVOCATION_CLAIMED
             for event in events
         )
-        assert events[-1].payload == {"status": "succeeded"}
+        assert events[-1].payload == {
+            "status": "succeeded",
+            "outputs": result["outputs"],
+        }
         assert audit_run(store, "r1").ok
         state = store.project_state("r1")
         assert state["nodes"]["OUT.total"]["value"] == 12

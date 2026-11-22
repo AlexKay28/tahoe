@@ -1,5 +1,14 @@
 # The Compact Language: TAHOE Grammar + TRIZ Operators, Implicit
 
+> **Evidence correction (2026-11-18):** this is a historical research note,
+> not a validated results table. Its grades predate the current graders, its
+> token percentages are output-token ratios rather than total-spend ratios,
+> and its prompts combine structure with an explicit answer-only contract.
+> They do not demonstrate internal typed-ref use or isolate that structure
+> from forced brevity. The claimed general "law" is therefore a hypothesis,
+> not an established result. See `docs/EVALUATION.md` and the prepared,
+> unrun `docs/PREREGISTRATION-structure-answer.md`.
+
 > The compound result (2026-09-14): TAHOE typed-ref grammar + TRIZ operators
 > (IFR-first, obstacle-naming, minimal derivation) as SILENT thinking
 > discipline — output contract = the answer only. 900-trial pilot across
@@ -110,19 +119,26 @@ separator-aware number) installed arm-agnostically; full gsm8k re-runs:
 1. **Token savings are the robust result**: −62/−73% (GLM gsm8k), −60/−61%
    (oss), −42-57% overall across benches. Direction holds on every bench,
    both models.
-2. **Quality gains are real but modest**: +4.5-6pp on gsm8k, +0.4-0.8pp
-   overall (GLM, within-noise on most benches). NOT +23.5pp.
+2. **Stored-grade gains were modest but remain grader-sensitive**: +4.5-6pp
+   on gsm8k and +0.4-0.8pp overall in these historical runs (GLM, within-noise
+   on most benches). They are not validated regrade effects. NOT +23.5pp.
 3. **The compound language ≈ plain tahoe on quality** (95.5 vs 95.5 GLM
    gsm8k; overall 96.3 vs 96.7 pre-correction) at −18-26% fewer tokens than
    tahoe. IFR-first bounding is a token lever, not a quality lever.
 4. The earlier "+23.5pp ladder" and "HM 1.362" headlines are RETRACTED —
    they compared clean-format skill outputs against broken-extraction classic
    outputs.
-5. The law (shape thought, never constrain output) still stands — the
-   explicit-TRIZ LSAT collapse (7/30) was quality-real, not extraction.
-6. Every numeric-bench comparison in this project must carry the v3 grader
-   going forward. Stage-1 full-eval gsm8k row also corrected offline
-   (classic 68.5%, tahoe 80.3%).
+5. The proposed law (shape thought, never constrain output) is **not
+   established**. The explicit-TRIZ LSAT collapse (7/30) is evidence against
+   that visible-notation variant, while the answer-only contract remains a
+   confound in the compact prompts.
+6. Every numeric-bench comparison must use the current arm-agnostic grader
+   and a versioned derived regrade. The archived Stage-1 GSM8K stored grades
+   are classic 68.5%, tahoe 80.3%; the full current-grader derived regrade
+   (2026-11-18, `benchmarks/results/derived/2026-11-18-stage1-full-v3/`)
+   now supersedes them — derived GSM8K 94.8% → 97.0% (GLM, Holm p=0.0010)
+   and 93.7% → 95.0% (gpt-oss, p=0.0060) — though its expectations are
+   reconstructed from archived grader details, not independent gold.
 
 The meta-lesson, three occurrences deep: **when one arm answers in a
 different FORMAT than another, the grader is part of the experiment.** Audit

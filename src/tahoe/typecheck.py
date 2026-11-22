@@ -1,10 +1,26 @@
-"""Static type checker with subtyping lattice (issue #71).
+"""Static type checker with the substitutability lattice (issue #71).
 
-The node types form a subtyping lattice under ⊑ (read "is a subtype of").
-The lattice captures epistemic strength: a stronger type can be used where
-a weaker type is expected, because it carries more epistemic warrant.
+The node types form a partial order under ⊑ (read "is a subtype of",
+meaning *safely substitutable for*): ``τ1 ⊑ τ2`` holds exactly when a
+``τ1`` value may be supplied where a ``τ2`` value is declared/expected,
+because the subtype carries at least the epistemic warrant or commitment
+the supertype slot requires.
 
-The lattice is implemented here and referenced from
+⊑ captures *safe substitutability only*.  It deliberately does NOT
+capture epistemic promotion: an assumption, goal, or hypothesis must
+never implicitly become evidence, a fact, or a verification, and
+evidence must never implicitly become a fact.  The checker never
+derives a higher-warrant type from a lower one; converting an
+existing node to a higher-warrant type is command work (e.g.
+``verify`` commits V, ``estimate`` commits F, ``choose`` commits D).
+High-warrant nodes may also be introduced by explicit INPUT
+declarations (which assert a node's type directly) — what is excluded
+is implicit conversion through the type system, not command-free
+introduction of freshly declared nodes.  Hence the warrant chain runs
+``V ⊑ F ⊑ E`` (a verified result is a fact; a fact is evidence), and
+there is no edge in the reverse direction.
+
+The lattice is implemented here and specified in
 ``paper/design/formal-semantics.md`` §3.1–3.2.
 """
 
@@ -32,23 +48,29 @@ from .syntax.model import (
 if TYPE_CHECKING:
     from .registry.registry import Registry
 
-#: Subtyping edges from the 15 axioms in formal-semantics.md §3.2.
+#: Substitutability edges from the 7 axioms in formal-semantics.md §3.2.
 #: Each entry ``src: [dst1, dst2, ...]`` means ``src ⊑ dst`` (src is a
-#: subtype of dst).  The lattice is a DAG — G has two parents (Q and C),
-#: A has two parents (H and E), H has two parents (F and D), F and D
-#: share the top V.
+#: subtype of dst, i.e. a src value safely fills a dst slot).  The
+#: order is a forest of five disjoint chains — one per role family —
+#: with no global top or bottom:
+#:
+#: - warrant chain:   V ⊑ F ⊑ E  (verified ⊑ fact ⊑ evidence)
+#: - posit chain:     A ⊑ H      (assumption ⊑ hypothesis)
+#: - openness chain:  G ⊑ Q ⊑ U  (goal ⊑ question ⊑ unknown)
+#: - commitment:      D ⊑ O      (decision ⊑ option)
+#: - preference:      C ⊑ PF     (constraint ⊑ preference)
+#:
+#: Every old "promotion" edge (Q⊑A, U⊑H, A⊑E, H⊑F, H⊑D, O⊑D, D⊑V,
+#: F⊑V, and G⊑C as a role conversion) is gone: promotions are performed
+#: by commands at runtime, never by the type system.
 SUBLATTICE: dict[str, list[str]] = {
-    "G": ["Q", "C"],
-    "Q": ["U", "A"],
+    "V": ["F"],
+    "F": ["E"],
+    "A": ["H"],
+    "G": ["Q"],
+    "Q": ["U"],
     "C": ["PF"],
-    "PF": ["O"],
-    "U": ["H"],
-    "A": ["H", "E"],
-    "E": ["F"],
-    "H": ["F", "D"],
-    "O": ["D"],
-    "F": ["V"],
-    "D": ["V"],
+    "D": ["O"],
 }
 
 #: Types orthogonal to the main lattice — no subtyping with lattice
@@ -61,19 +83,22 @@ ALL_TYPES: frozenset[str] = frozenset(
     set(SUBLATTICE.keys()) | {d for dsts in SUBLATTICE.values() for d in dsts} | ORTHOGONAL
 )
 
-#: The 15 axiomatic edges from formal-semantics.md §3.2, as (subtype, supertype) pairs.
+#: The 7 axiomatic edges from formal-semantics.md §3.2, as (subtype, supertype) pairs.
 LATTICE_AXIOMS: frozenset[tuple[str, str]] = frozenset({
-    ("G", "Q"), ("G", "C"), ("Q", "U"), ("Q", "A"), ("C", "PF"),
-    ("PF", "O"), ("U", "H"), ("A", "H"), ("A", "E"), ("E", "F"),
-    ("H", "F"), ("H", "D"), ("O", "D"), ("F", "V"), ("D", "V"),
+    ("V", "F"), ("F", "E"), ("A", "H"), ("G", "Q"),
+    ("Q", "U"), ("C", "PF"), ("D", "O"),
 })
 
 
 def is_subtype(t1: str, t2: str) -> bool:
-    """True if t1 ⊑ t2 (t1 can be used where t2 is expected).
+    """True if t1 ⊑ t2 (a t1 value can fill a slot expecting t2).
 
     Computes the reflexive-transitive closure of SUBLATTICE via BFS.
-    Orthogonal types are subtypes only of themselves.
+    Orthogonal types are subtypes only of themselves.  Families are
+    disjoint: there is no derivation across chains, so a goal,
+    assumption, or hypothesis is never a subtype of evidence, a fact,
+    or a verification, and a decision is incomparable with a
+    verification.
     """
     if t1 == t2:
         return True
@@ -160,7 +185,20 @@ def _collect_invocation_errors(
     state: dict[str, str],
     registry: Registry | None,
 ) -> list[str]:
-    """Check that argument types match the command contract."""
+    """Check that a DO invocation matches its command contract.
+
+    Two judgments are made (formal-semantics.md §3.3):
+
+    - Input compatibility: each typed argument's actual node type must
+      be a subtype of the contract's accepted type for that argument
+      (compound accepted types like ``Q/U`` are a union — actual ⊑ some
+      member).
+    - Output assignment: contract outputs map to invocation targets
+      positionally (target i ↔ declared output i); the produced type
+      must be a subtype of the target's declared type (produced ⊑
+      target).  Compound outputs like ``G/C/P/K/OUT`` stay unions —
+      some member must be a subtype of the target type.
+    """
     if registry is None:
         return []
     try:
@@ -169,54 +207,51 @@ def _collect_invocation_errors(
         return [f"unknown command: {command}"]
 
     errors: list[str] = []
-    input_types: dict[str, str | None] = {}
+    input_types: dict[str, list[str]] = {}
     for entry in spec.inputs:
-        name, node_type = _parse_input_spec(entry)
-        input_types[name] = node_type
+        name, _, type_part = _parse_input_spec_full(entry)
+        input_types[name] = _parse_type_specs(type_part)
 
     for arg in args:
-        expected_type = input_types.get(arg.name)
-        if expected_type is None:
+        expected_types = input_types.get(arg.name, [])
+        if not expected_types:
             continue
-        if isinstance(arg.value, str) and "." in arg.value:
-            ref_prefix = arg.value.split(".")[0]
-            if ref_prefix in ALL_TYPES:
-                actual_type = ref_prefix
-                if not is_subtype(actual_type, expected_type):
-                    errors.append(
-                        f"type mismatch: argument {arg.name} expects {expected_type}"
-                        f" but got {actual_type}"
-                    )
-                continue
-        if isinstance(arg.value, str) and _ref_type(arg.value) in ALL_TYPES:
-            actual_type = _ref_type(arg.value)
-            if not is_subtype(actual_type, expected_type):
-                errors.append(
-                    f"type mismatch: argument {arg.name} expects {expected_type}"
-                    f" but got {actual_type}"
-                )
+        if not isinstance(arg.value, str):
+            continue
+        actual_type = _ref_type(arg.value)
+        if actual_type not in ALL_TYPES:
+            continue
+        if not any(is_subtype(actual_type, e) for e in expected_types):
+            errors.append(
+                f"type mismatch: argument {arg.name} expects"
+                f" {'/'.join(expected_types)}"
+                f" but got {actual_type}"
+            )
 
-    output_types: dict[str, list[str]] = {}
+    # Output check: contract outputs map to invocation targets
+    # positionally (target i is filled by declared output i; targets
+    # beyond the declared outputs have no contract type to check
+    # against).  Compound outputs like ``G/C/P/K/OUT`` stay unions: the
+    # check passes when at least one member is a subtype of the
+    # target's declared type.  The direction is produced-to-target —
+    # the value the command produces must be safely substitutable for
+    # the target slot's declared type (produced ⊑ target), never the
+    # other way around.
+    output_specs: list[tuple[str, list[str]]] = []
     for entry in spec.outputs:
         name, _, type_part = _parse_input_spec_full(entry)
-        output_types[name] = _parse_type_specs(type_part)
+        output_specs.append((name, _parse_type_specs(type_part)))
 
-    for target in targets:
+    for target, (out_name, out_types) in zip(targets, output_specs):
         if target.startswith("KB."):
             continue
         target_type = _ref_type(target)
-        output_names = list(output_types.keys())
-        if output_names:
-            out_name = output_names[0]
-            out_type_list = output_types[out_name]
-            if out_type_list and not any(
-                is_subtype(target_type, ot) for ot in out_type_list
-            ):
-                errors.append(
-                    f"type mismatch: output {out_name} produces"
-                    f" {'/'.join(out_type_list)}"
-                    f" but target {target} expects {target_type}"
-                )
+        if out_types and not any(is_subtype(ot, target_type) for ot in out_types):
+            errors.append(
+                f"type mismatch: output {out_name} produces"
+                f" {'/'.join(out_types)}"
+                f" but target {target} expects {target_type}"
+            )
 
     return errors
 
@@ -262,7 +297,12 @@ def _collect_try_errors(
     state: dict[str, str],
     registry: Registry | None,
 ) -> list[str]:
-    """Check that TRY branch targets have compatible types.
+    """Check that TRY branch statements are well-typed and branch
+    targets have compatible types.
+
+    Errors from nested branch statements (unknown commands, argument
+    mismatches, output mismatches, DONE errors) are collected and
+    reported, so nothing can hide inside a speculative branch.
 
     All branches in a TRY block should produce compatible target types.
     If one branch produces V.result and another produces H.guess, the
@@ -277,7 +317,11 @@ def _collect_try_errors(
         branch_state = dict(state)
         branch_types: dict[str, str] = {}
         for stmt in branch:
-            _collect_statement_errors(stmt, branch_state, registry)
+            # Nested statement errors (unknown commands, argument
+            # mismatches, output mismatches) are reported, not
+            # discarded — a TRY branch is not a place where an
+            # ill-typed step can hide.
+            errors.extend(_collect_statement_errors(stmt, branch_state, registry))
             if isinstance(stmt, Invocation):
                 for target in stmt.targets:
                     if not target.startswith("KB."):

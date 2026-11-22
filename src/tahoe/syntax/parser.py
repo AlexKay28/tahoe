@@ -3877,9 +3877,9 @@ def _validate_call_contract(
     # arguments.  When a CALL argument value is a typed reference whose
     # prefix is NOT a subtype of the protocol INPUT declaration's prefix
     # (per the subtyping lattice in typecheck.py), emit a warning (not an
-    # error).  For example, passing E.* where F.* is expected is fine
-    # (E ⊑ F), but passing D.* where H.* is expected warns (D and H are
-    # orthogonal).  Warnings go to _call_type_warnings.
+    # error).  For example, passing F.* where E.* is expected is fine
+    # (F ⊑ E), but passing E.* where F.* is expected warns: evidence is
+    # not implicitly promoted to fact.  Warnings go to _call_type_warnings.
     from ..typecheck import is_subtype, ALL_TYPES
     for argument in call.args:
         if not isinstance(argument.value, str):

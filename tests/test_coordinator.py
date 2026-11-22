@@ -2274,7 +2274,9 @@ def test_conditional_return_finishes_run_and_cancels_later_tasks(tmp_path):
 
         history = store.events("run-early")
         assert history[-1].event_type is EventType.RUN_FINISHED
-        assert history[-1].payload == {"status": "succeeded"}
+        assert history[-1].payload == {
+            "status": "succeeded", "outputs": result["outputs"],
+        }
         assert not [
             event for event in history if event.invocation_id == "inv-2"
         ]

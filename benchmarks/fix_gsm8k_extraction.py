@@ -1,119 +1,141 @@
 #!/usr/bin/env python3
-"""Fix GSM8K answer extraction: LaTeX artifacts + thousands separators.
+"""Re-grade archived GSM8K trials into a fresh derived-results artifact.
 
-The old extractor (last plain `[-?\\d+]+`) split comma/LaTeX-formatted numbers
-('1{,}430', '2\\,000', '$2,180' -> '430'/'000'/'180'), under-crediting verbose
-LaTeX answers. This v2 extractor is arm-agnostic (same function for all arms)
-and mirrors common eval-harness handling: #### -> boxed -> bold/'Answer:' ->
-last separator-aware number.
+The old extractor split comma/LaTeX-formatted numbers ('1{,}430', '2\\,000',
+'$2,180' -> '430'/'000'/'180') and the old string comparison under-credited
+verbose answers ('#### 42.00' vs gold '42'). This tool re-grades the GSM8K
+trials of an archived results file with the CURRENT ``grade_gsm8k``
+implementation (benchmarks/run_public_bench.py).
 
-Re-grades stored final_answers in place for: skill_cmp_gsm8k.json,
-full_test_eval.json (gsm8k subset), single_gsm8k.json.
+Safety model (this workflow is derived-only; nothing runs in place):
+
+- ``--input`` and ``--output`` are explicit and required. There are no
+  hardcoded result paths and the legacy no-argument invocation refuses to
+  run instead of mutating old locations.
+- The raw input archive is opened read-only and is NEVER modified; raw
+  ``final_answer`` values are carried through unchanged.
+- An existing ``--output`` is refused (atomic exclusive create); the output
+  parent directory is created if missing.
+- Original verdicts are preserved as ``archived_passed`` /
+  ``archived_failure_class`` / ``archived_grader_detail`` next to the derived
+  ``passed`` / ``failure_class`` / ``grader_detail`` / ``quality_score``.
+- Missing or malformed archived ``expected=`` values become explicit
+  ``grader_error`` results, never silent passes.
+- The derived artifact is byte-deterministic and contains the grader
+  version plus SHA-256 hashes of the source archive and grader source;
+  timestamps/paths go to the optional ``--run-metadata`` sidecar.
+
+Usage:
+  PYTHONPATH=src python3 benchmarks/fix_gsm8k_extraction.py \\
+      --input  benchmarks/results/2026-09-14-skill-study/skill_cmp_gsm8k.json \\
+      --output benchmarks/results/derived/skill_cmp_gsm8k.regraded.json
 """
 
-import json
-import re
+from __future__ import annotations
+
+import argparse
+import sys
 from pathlib import Path
 
-_SEP_NUM = r"-?\d{1,3}(?:[,\u202f ]\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+try:
+    from benchmarks.gsm8k_regrade import RegradeError, run_pipeline
+except ImportError:
+    from gsm8k_regrade import RegradeError, run_pipeline
+
+EXIT_USAGE = 2
+EXIT_ERROR = 1
+
+_LEGACY_MESSAGE = """\
+This tool no longer re-grades results in place.
+
+The legacy invocation (no arguments, rewriting hardcoded files under
+benchmarks/results/) has been removed: mutating raw archives destroys the
+provenance of every published number derived from them.
+
+Derived-results usage (the raw input archive is never modified):
+
+    PYTHONPATH=src python3 benchmarks/fix_gsm8k_extraction.py \\
+        --input  <archived results .json> \\
+        --output <fresh derived .json> [--run-metadata <sidecar .json>]
+
+Existing --output files are refused; pick a new path for each run.
+"""
 
 
-def extract_model_number_v2(text: str) -> str:
-    text = str(text).strip()
-    # 1. official #### marker
-    m = re.search(r"####\s*([\d,]+)", text)
-    if m:
-        return m.group(1).replace(",", "")
-    # normalize LaTeX/formatting artifacts (keep digits + separators)
-    norm = (
-        text.replace("\\,", "")
-        .replace("\\ ", "")
-        .replace("\u202f", " ")
-        .replace("{", "")
-        .replace("}", "")
-        .replace("$", "")
-        .replace("\\$", "")
-        .replace("\\text", "")
-        .replace("\\$", "")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="fix_gsm8k_extraction.py",
+        description=(
+            "Re-grade archived GSM8K trials with the current grader into a "
+            "new derived artifact (the input archive is never modified)."
+        ),
+        epilog=(
+            "Example: PYTHONPATH=src python3 benchmarks/fix_gsm8k_extraction.py "
+            "--input benchmarks/results/<archive>.json --output <derived>.json"
+        ),
     )
-    norm = re.sub(r"\*\*", "", norm)
-    # 2. boxed answer
-    m = re.search(r"\\boxed\{([^}]*)\}", norm)
-    if m:
-        nums = re.findall(_SEP_NUM, m.group(1))
-        if nums:
-            return nums[-1].replace(",", "").replace("\u202f", "")
-    # 3. bold / 'Answer:' patterns
-    m = re.search(r"(?:answer|total|raised|costs?|paid|takes?)\s*[:=]?\s*(" + _SEP_NUM + r")", norm, re.I)
-    if m:
-        return m.group(1).replace(",", "").replace("\u202f", "")
-    m = re.search(r"\*{2}[^*]*?(" + _SEP_NUM + r")[^*]*?\*{2}", norm)
-    if m:
-        return m.group(1).replace(",", "").replace("\u202f", "")
-    # 4. last separator-aware number
-    nums = re.findall(_SEP_NUM, norm)
-    if nums:
-        return nums[-1].replace(",", "").replace("\u202f", "")
-    return norm[:50]
+    parser.add_argument(
+        "--input",
+        required=True,
+        metavar="ARCHIVE_JSON",
+        help="existing archived results JSON file (read-only, never modified)",
+    )
+    parser.add_argument(
+        "--output",
+        required=True,
+        metavar="DERIVED_JSON",
+        help="fresh path for the derived artifact; must not already exist",
+    )
+    parser.add_argument(
+        "--run-metadata",
+        metavar="SIDECAR_JSON",
+        help=(
+            "optional sidecar for run metadata (timestamps, absolute paths); "
+            "kept out of the deterministic derived artifact"
+        ),
+    )
+    return parser
 
 
-def grade_with_v2(final_answer: str, grader_detail: str) -> bool | None:
-    """Re-grade using expected from the stored grader_detail."""
-    m = re.search(r"expected=([-\d,\.]+)", grader_detail)
-    if not m:
-        return None
-    expected = m.group(1).replace(",", "")
-    got = extract_model_number_v2(final_answer)
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        # Legacy invocation: fail loudly with the new usage rather than
+        # touching any result file.
+        print(_LEGACY_MESSAGE, file=sys.stderr, end="")
+        return EXIT_USAGE
+
+    args = build_parser().parse_args(argv)
     try:
-        return abs(float(got) - float(expected)) < 1e-6
-    except ValueError:
-        return got == expected
+        summary = run_pipeline(
+            Path(args.input),
+            Path(args.output),
+            Path(args.run_metadata) if args.run_metadata else None,
+        )
+    except RegradeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
 
-
-def main():
-    targets = [
-        Path("benchmarks/results/skill_cmp_gsm8k.json"),
-        Path("benchmarks/results/full_test_eval.json"),
-        Path("benchmarks/results/single_gsm8k.json"),
-    ]
-    for path in targets:
-        if not path.exists():
-            continue
-        trials = json.load(open(path))
-        changed = 0
-        scanned = 0
-        for t in trials:
-            if t.get("benchmark") != "gsm8k":
-                continue
-            scanned += 1
-            new_passed = grade_with_v2(t.get("final_answer", ""), t.get("grader_detail", ""))
-            if new_passed is None:
-                continue
-            if bool(new_passed) != bool(t["passed"]):
-                changed += 1
-                t["passed"] = bool(new_passed)
-                t["quality_score"] = 1.0 if new_passed else 0.0
-                t["failure_class"] = "none" if new_passed else "wrong_answer"
-        with open(path, "w") as f:
-            json.dump(trials, f, indent=2, sort_keys=True)
-        print(f"{path.name}: scanned {scanned} gsm8k trials, re-graded {changed}")
-
-    # corrected summary per source
-    print("\n=== CORRECTED gsm8k numbers ===")
-    trials = json.load(open("benchmarks/results/skill_cmp_gsm8k.json"))
-    for arm in ("classic", "skill_prompt", "triz_implicit"):
-        at = [t for t in trials if t["arm"] == arm]
-        p = sum(1 for t in at if t["passed"])
-        o = sum(t["output_tokens"] for t in at) / len(at)
-        print(f"  {arm:14s}: {p}/{len(at)} ({100*p/len(at):.1f}%), avg out {o:.0f}")
-
-    trials = json.load(open("benchmarks/results/full_test_eval.json"))
-    for arm in ("classic", "tahoe"):
-        at = [t for t in trials if t.get("benchmark") == "gsm8k" and t["arm"] == arm]
-        if at:
-            p = sum(1 for t in at if t["passed"])
-            print(f"  Stage-1 {arm:10s}: {p}/{len(at)} ({100*p/len(at):.1f}%)")
+    changes = summary["verdict_changes"]
+    print(
+        f"gsm8k trials re-graded: {summary['gsm8k_trials']} "
+        f"(skipped {summary['skipped_non_gsm8k']} non-gsm8k)"
+    )
+    print(
+        f"derived verdicts: passed={summary['passed']} "
+        f"wrong_answer={summary['wrong_answer']} "
+        f"grader_errors={summary['grader_errors']}"
+    )
+    print(
+        f"verdict changes: fail_to_pass={changes['fail_to_pass']} "
+        f"pass_to_fail={changes['pass_to_fail']}"
+    )
+    print(f"wrote derived artifact: {Path(args.output)}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

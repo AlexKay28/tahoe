@@ -1,0 +1,244 @@
+{
+  "alpha": 0.05,
+  "archive": {
+    "archives": [
+      {
+        "arms": [
+          "150",
+          "200",
+          "50",
+          "93",
+          "classic"
+        ],
+        "n_trials": 1500,
+        "path": "benchmarks/results/2026-09-14-skill-study/prompt_ablation.json",
+        "per_benchmark_max": {
+          "150|classic": {
+            "benchmark": "gsm8k",
+            "sd_d": 0.351364
+          },
+          "93|150": {
+            "benchmark": "mmlu_acct",
+            "sd_d": 0.344265
+          },
+          "93|200": {
+            "benchmark": "mmlu_math",
+            "sd_d": 0.157135
+          },
+          "93|50": {
+            "benchmark": "gsm8k",
+            "sd_d": 0.210819
+          },
+          "93|classic": {
+            "benchmark": "mmlu_math",
+            "sd_d": 0.245955
+          }
+        },
+        "pooled": {
+          "150|classic": {
+            "mean_difference": -0.01,
+            "n_tasks": 100,
+            "sd_d": 0.173787
+          },
+          "93|150": {
+            "mean_difference": 0.003333,
+            "n_tasks": 100,
+            "sd_d": 0.186497
+          },
+          "93|200": {
+            "mean_difference": -0.013333,
+            "n_tasks": 100,
+            "sd_d": 0.105089
+          },
+          "93|50": {
+            "mean_difference": -0.016667,
+            "n_tasks": 100,
+            "sd_d": 0.13711
+          },
+          "93|classic": {
+            "mean_difference": -0.006667,
+            "n_tasks": 100,
+            "sd_d": 0.141976
+          }
+        },
+        "sha256": "67fe24ddd2015709c4d69325073c1e01317aebaa42cdec69113de0190911d2fb"
+      }
+    ],
+    "pairs": [
+      [
+        "93",
+        "classic"
+      ],
+      [
+        "93",
+        "50"
+      ],
+      [
+        "93",
+        "150"
+      ],
+      [
+        "93",
+        "200"
+      ],
+      [
+        "150",
+        "classic"
+      ]
+    ]
+  },
+  "comparisons_two_sided": {
+    "by_sd_scenario": {
+      "empirical_benchmark_max": {
+        "power": 0.9999995001230725,
+        "required_n": 150,
+        "sd_d": 0.351364
+      },
+      "empirical_pooled_max": {
+        "power": 1.0,
+        "required_n": 43,
+        "sd_d": 0.186497
+      },
+      "independent_arm_sensitivity": {
+        "power": 0.9999391021791473,
+        "required_n": 202,
+        "sd_d": 0.408248
+      },
+      "paired_worst_case": {
+        "power": 0.9740714677235911,
+        "required_n": 404,
+        "sd_d": 0.57735
+      },
+      "planning": {
+        "power": 0.999999999999999,
+        "required_n": 76,
+        "sd_d": 0.25
+      }
+    },
+    "delta": 0.1,
+    "family_size": 6
+  },
+  "formulas": {
+    "independent_arm_sd": "sqrt(1/(2*trials_per_task))",
+    "noninferiority_power": "Phi(margin / (sd_d/sqrt(n)) - z_{1-alpha/m})",
+    "paired_worst_case_sd": "sqrt(1/trials_per_task)",
+    "precision_half_width": "z_{1-(1-c)/2} * sd_d / sqrt(n)",
+    "required_n_noninferiority": "ceil(((z_{1-alpha/m}+z_{power}) * sd_d / margin)^2)",
+    "required_n_two_sided": "ceil(((z_{1-alpha/(2m)}+z_{power}) * sd_d / delta)^2)",
+    "two_sided_power": "Phi(delta / (sd_d/sqrt(n)) - z_{1-alpha/(2m)})"
+  },
+  "h2_cluster": {
+    "benchmarks": [
+      "bbh",
+      "bbh_track",
+      "bbh_arith"
+    ],
+    "by_sd_scenario": {
+      "empirical_benchmark_max": {
+        "power": 0.9313687733429894,
+        "required_n": 150,
+        "sd_d": 0.351364
+      },
+      "empirical_pooled_max": {
+        "power": 0.9999998566929387,
+        "required_n": 43,
+        "sd_d": 0.186497
+      },
+      "independent_arm_sensitivity": {
+        "power": 0.8189551967170099,
+        "required_n": 202,
+        "sd_d": 0.408248
+      },
+      "paired_worst_case": {
+        "power": 0.44896480631802416,
+        "required_n": 404,
+        "sd_d": 0.57735
+      },
+      "planning": {
+        "power": 0.9992065213163168,
+        "required_n": 76,
+        "sd_d": 0.25
+      }
+    },
+    "comparison": [
+      "tahoe_full",
+      "answer_only"
+    ],
+    "delta": 0.1,
+    "family": "the scoped cluster comparison is one of the 6 confirmatory comparisons in each (regime, success) and (regime, total_tokens) family; its global counterpart is exploratory",
+    "family_size": 6,
+    "n_tasks": 210
+  },
+  "margin": 0.05,
+  "multiplicity": {
+    "comparisons_family_composition": "five global comparisons + one scoped H2 cluster comparison (tahoe_full vs answer_only on the pooled bbh family); the global counterpart of the cluster test is exploratory and not in any family",
+    "comparisons_family_size": 6,
+    "comparisons_per_comparison_alpha_two_sided": 0.004166666666666667,
+    "convention": "Bonferroni / Holm first step (alpha/m per comparison); conservative for the actual Holm step-down procedure",
+    "noninferiority_family_size": 4,
+    "noninferiority_per_comparison_alpha": 0.0125
+  },
+  "noninferiority": {
+    "by_sd_scenario": {
+      "empirical_benchmark_max": {
+        "power": 0.9361918400379932,
+        "precision_half_width": 0.026028931085999532,
+        "precision_within_margin": true,
+        "required_n": 470,
+        "sd_d": 0.351364
+      },
+      "empirical_pooled_max": {
+        "power": 0.999999388512071,
+        "precision_half_width": 0.013815637233028012,
+        "precision_within_margin": true,
+        "required_n": 133,
+        "sd_d": 0.186497
+      },
+      "independent_arm_sensitivity": {
+        "power": 0.8410948117720702,
+        "precision_half_width": 0.030242900861958,
+        "precision_within_margin": true,
+        "required_n": 634,
+        "sd_d": 0.408248
+      },
+      "paired_worst_case": {
+        "power": 0.5198930324195478,
+        "precision_half_width": 0.04276992056448597,
+        "precision_within_margin": true,
+        "required_n": 1268,
+        "sd_d": 0.57735
+      },
+      "planning": {
+        "power": 0.9988561736853785,
+        "precision_half_width": 0.018519918863343664,
+        "precision_within_margin": true,
+        "required_n": 238,
+        "sd_d": 0.25
+      }
+    }
+  },
+  "planned": {
+    "n_tasks": 700,
+    "planned_trials": 25200
+  },
+  "sd_assumptions": {
+    "empirical_benchmark_max": 0.351364,
+    "empirical_pooled_max": 0.186497,
+    "independent_arm_sensitivity": 0.408248290463863,
+    "paired_worst_case": 0.5773502691896257,
+    "planning": 0.25
+  },
+  "target_power": 0.8,
+  "trials_per_task": 3,
+  "verdicts": {
+    "comparisons_powered_at_paired_worst_case": true,
+    "h2_cluster_powered_at_independent_arm_bound": true,
+    "h2_cluster_powered_at_paired_worst_case": false,
+    "h2_cluster_powered_at_planning_sd": true,
+    "ni_powered_at_empirical_pooled_max": true,
+    "ni_powered_at_independent_arm_bound": true,
+    "ni_powered_at_paired_worst_case": false,
+    "ni_powered_at_planning_sd": true,
+    "precision_within_margin_at_paired_worst_case": true
+  }
+}
